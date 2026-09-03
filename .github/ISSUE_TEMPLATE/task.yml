@@ -1,0 +1,122 @@
+name: 開発タスク
+about: 機能追加・設計変更・改善などの作業Issue
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Uchi-PulseではIssueをChat / Work / Codex間の共通の作業契約として扱います。
+        確定していない内容は「仮」「検討中」と明記してください。
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: 1. 目的
+      description: なぜこの作業を行うのかを記載してください。
+      placeholder: このIssueで実現したい目的を記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: background
+    attributes:
+      label: 2. 背景
+      description: どのような問題・要求・検討から発生した作業かを記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: target
+    attributes:
+      label: 3. 対象
+      description: Repository、アプリ、機能、ファイル、モジュール、対象ハードウェアなどを記載してください。
+      placeholder: |
+        - Repository: DANA10423/Uchi-Pulse
+        - 対象アプリ: apps/...
+        - 対象モジュール: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: decisions
+    attributes:
+      label: 4. 決定事項
+      description: Chat等で確定した内容を記載してください。未確定事項は未確定と明記してください。
+      placeholder: |
+        - ...
+        - ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: 5. 参照仕様
+      description: main上の正式な設計文書・仕様書と該当箇所を記載してください。
+      placeholder: |
+        - docs/...
+        - 関連する仕様章: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: 6. 実装内容
+      description: Codex等が実装すべき範囲を具体的に記載してください。
+      placeholder: |
+        - ...を追加する
+        - ...を変更する
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: 7. 非対象
+      description: 今回変更しないもの、対象外の機能を明示してください。
+      placeholder: |
+        - ...は変更しない
+
+  - type: textarea
+    id: done
+    attributes:
+      label: 8. 完了条件
+      description: 何を満たせばDoneと判断できるかをチェック可能な形で記載してください。
+      placeholder: |
+        - [ ] ...が動作する
+        - [ ] 既存機能を壊していない
+        - [ ] 設計書と実装が一致している
+    validations:
+      required: true
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: 9. テスト・確認
+      description: 必要な単体テスト、結合テスト、実機確認、回帰確認などを記載してください。
+      placeholder: |
+        - [ ] cargo fmt --all -- --check
+        - [ ] cargo test --workspace --offline
+        - [ ] 必要な実機確認
+    validations:
+      required: true
+
+  - type: textarea
+    id: related
+    attributes:
+      label: 10. 関連Issue / PR
+      description: 関連する親Issue、子Issue、他機能のIssue、PRを記載してください。
+      placeholder: |
+        - #123
+        - 関連PR: 作成後に追記
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 作成前確認
+      options:
+        - label: 重要な仕様をChatだけに残さず、必要な内容をIssueまたは設計文書へ反映する前提である。
+          required: true
+        - label: 正式な参照先はGitHub main上の文書・コードを基準にする。
+          required: true
