@@ -1,5 +1,5 @@
 name: 開発タスク
-about: 機能追加・設計変更・改善などの作業Issue
+description: 機能追加・設計変更・改善などの作業Issue
 labels: []
 body:
   - type: markdown
