@@ -81,8 +81,8 @@ body:
   - type: textarea
     id: done
     attributes:
-      label: 8. 完了条件
-      description: 何を満たせばDoneと判断できるかをチェック可能な形で記載してください。
+      label: 8. 受け入れ条件
+      description: Issueを完了と判断するために満たすべき条件を、チェックボックス形式で記載してください。
       placeholder: |
         - [ ] ...が動作する
         - [ ] 既存機能を壊していない
