@@ -1,0 +1,16 @@
+[target.thumbv6m-none-eabi]
+runner = "probe-rs run --chip RP2040"
+rustflags = ["-C", "link-arg=-Tlink.x"]
+
+[target.thumbv8m.main-none-eabihf]
+runner = "probe-rs run --chip RP2350"
+rustflags = ["-C", "link-arg=-Tlink.x"]
+
+[alias]
+build-pico-w = "build --release --features pico-w --target thumbv6m-none-eabi"
+build-pico-2-w = "build --release --features pico-2-w --target thumbv8m.main-none-eabihf"
+run-pico-w = "run --release --features pico-w --target thumbv6m-none-eabi"
+run-pico-2-w = "run --release --features pico-2-w --target thumbv8m.main-none-eabihf"
+
+[env]
+DEFMT_LOG = "info"

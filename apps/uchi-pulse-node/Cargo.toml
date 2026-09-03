@@ -1,0 +1,55 @@
+[package]
+name = "uchi-pulse-node"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+publish = false
+description = "Uchi Pulse family I/O node firmware for Raspberry Pi Pico W and Pico 2 W"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+pico-w = ["firmware", "embassy-rp/rp2040"]
+pico-2-w = ["firmware", "embassy-rp/rp235xa"]
+firmware = [
+    "dep:cortex-m-rt",
+    "dep:cyw43",
+    "dep:cyw43-pio",
+    "dep:defmt",
+    "dep:defmt-rtt",
+    "dep:embassy-executor",
+    "dep:embassy-net",
+    "dep:embassy-rp",
+    "dep:embassy-sync",
+    "dep:embassy-time",
+    "dep:panic-probe",
+    "dep:portable-atomic",
+    "dep:static_cell",
+]
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "uchi-pulse-node"
+path = "src/bin/uchi-pulse-node.rs"
+required-features = ["firmware"]
+
+[dependencies]
+heapless = { version = "0.9", default-features = false }
+serde = { version = "1.0.203", default-features = false, features = ["derive"] }
+serde-json-core = "0.5.1"
+
+cortex-m-rt = { version = "0.7.5", optional = true }
+cyw43 = { version = "0.7.0", default-features = false, features = ["defmt"], optional = true }
+cyw43-pio = { version = "0.10.0", features = ["defmt"], optional = true }
+defmt = { version = "1.0.1", optional = true }
+defmt-rtt = { version = "1.0.0", optional = true }
+embassy-executor = { version = "0.10.0", features = ["defmt"], optional = true }
+embassy-net = { version = "0.9.1", features = ["defmt", "udp", "dhcpv4", "medium-ethernet"], optional = true }
+embassy-rp = { version = "0.10.0", default-features = false, features = ["defmt", "time-driver", "critical-section-impl", "executor-thread", "executor-interrupt"], optional = true }
+embassy-sync = { version = "0.8.0", features = ["defmt"], optional = true }
+embassy-time = { version = "0.5.1", features = ["defmt", "defmt-timestamp-uptime"], optional = true }
+panic-probe = { version = "1.0.0", features = ["print-defmt"], optional = true }
+portable-atomic = { version = "1.5", features = ["critical-section"], optional = true }
+static_cell = { version = "2.1", optional = true }
