@@ -1,0 +1,112 @@
+name: 不具合報告
+about: 再現可能な不具合の調査・修正Issue
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        不具合Issueでは、症状・再現条件・原因・修正内容・回帰テストを追跡できる状態にします。
+
+  - type: textarea
+    id: symptom
+    attributes:
+      label: 1. 症状
+      description: 何が起きているかを具体的に記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 2. 再現条件・手順
+      description: 再現環境、手順、入力条件などを記載してください。
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 3. 期待する動作
+      description: 正常時にどう動くべきかを記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: target
+    attributes:
+      label: 4. 対象
+      description: Repository、アプリ、機能、ファイル、対象ハードウェアなどを記載してください。
+      placeholder: |
+        - Repository: DANA10423/Uchi-Pulse
+        - 対象アプリ: apps/...
+        - 対象環境: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: 5. 参照仕様
+      description: 正常動作を定義しているmain上の設計文書・仕様書を記載してください。
+      placeholder: |
+        - docs/...
+    validations:
+      required: true
+
+  - type: textarea
+    id: analysis
+    attributes:
+      label: 6. 原因・分析
+      description: 作成時点で不明な場合は「調査中」と記載し、判明後に更新してください。
+      placeholder: 調査中
+    validations:
+      required: true
+
+  - type: textarea
+    id: fix
+    attributes:
+      label: 7. 修正内容
+      description: 修正方針または修正後の内容を記載してください。未確定なら「検討中」としてください。
+      placeholder: 検討中
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: 8. 非対象
+      description: 今回変更しない範囲を記載してください。
+
+  - type: textarea
+    id: done
+    attributes:
+      label: 9. 完了条件
+      description: 修正完了の判定条件を記載してください。
+      placeholder: |
+        - [ ] 再現手順で不具合が再発しない
+        - [ ] 回帰テストが成功する
+        - [ ] 設計変更が必要な場合は設計文書も更新されている
+    validations:
+      required: true
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: 10. テスト・確認
+      description: 再現テスト、修正確認、回帰テスト、実機確認を記載してください。
+      placeholder: |
+        - [ ] 再現テスト
+        - [ ] 修正確認
+        - [ ] 回帰テスト
+    validations:
+      required: true
+
+  - type: textarea
+    id: related
+    attributes:
+      label: 11. 関連Issue / PR
+      description: 関連Issueや修正PRを記載してください。
