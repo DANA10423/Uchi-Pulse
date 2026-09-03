@@ -71,7 +71,7 @@ mainは安定した正式状態を保つ。
 ```text
 feature/12-cdc-node
 fix/15-event-ack
- docs/18-cdc-protocol
+docs/18-cdc-protocol
 ```
 
 ブランチ名にはIssue番号と短い目的を含めることを推奨する。
