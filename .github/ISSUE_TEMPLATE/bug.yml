@@ -1,5 +1,5 @@
 name: 不具合報告
-about: 再現可能な不具合の調査・修正Issue
+description: 再現可能な不具合の調査・修正Issue
 labels: []
 body:
   - type: markdown
