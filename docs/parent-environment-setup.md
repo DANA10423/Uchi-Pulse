@@ -2,181 +2,67 @@
 
 ## 1. 目的
 
-本書は、Uchi-Pulse 親機として使用する Raspberry Pi Zero W / Zero 2 W について、OSの書き込みから初期設定、SSH接続、Uchi-Pulse親機プログラムの配置、自動起動、ログ確認までの実行環境構築手順を定義する。
+本書は、Uchi-Pulse 親機として使用する Raspberry Pi Zero W / Zero 2 W について、OSの書き込みから初期設定、SSH接続、Rustクロスビルド、親機プログラムの配置、systemd自動起動、ログ確認、実機試験までの実行環境構築手順を定義する。
 
-本書は親機の実機環境を再現可能にするための運用手順書であり、Uchi-Pulseの通信仕様・データベース仕様・Web仕様そのものは各設計書を正本とする。
+本書は親機の実機環境を再現可能にするための運用手順書である。通信仕様・データベース仕様・Web仕様等は各設計書を正本とする。
 
-## 2. 対象機種
+クロスビルドおよびデプロイ方式は、`DANA10423/intrusion-suite` の `intrusion-gateway` で実績のある Zig + cargo-zigbuild、scp/ssh、systemd の構成を参考にする。
 
-対象機種は以下とする。
-
-- Raspberry Pi Zero 2 W
-- Raspberry Pi Zero W
+## 2. 対象機種とOS
 
 標準の開発・実機確認対象は **Raspberry Pi Zero 2 W** とする。
 
-### 2.1 推奨OS
+| 機種 | 推奨OS | Rustターゲット |
+| --- | --- | --- |
+| Raspberry Pi Zero 2 W | Raspberry Pi OS Lite 64-bit | `aarch64-unknown-linux-gnu` |
+| Raspberry Pi Zero W | Raspberry Pi OS Lite 32-bit | `arm-unknown-linux-gnueabihf` |
 
-#### Raspberry Pi Zero 2 W
-
-- Raspberry Pi OS Lite 64-bit
-- デスクトップ環境なし
-
-Zero 2 Wは64-bit Arm Cortex-A53を搭載し、Raspberry Pi OS 64-bitの対応機種である。
-
-#### Raspberry Pi Zero W
-
-- Raspberry Pi OS Lite 32-bit
-- デスクトップ環境なし
-
-初代Zero Wを使用する場合は32-bit環境を使用する。
-
-OSの具体的なリリース番号は固定せず、セットアップ時点でRaspberry Pi公式が提供する安定版Raspberry Pi OS Liteを使用する。
-
-参考:
-
-- https://www.raspberrypi.com/software/operating-systems/
-- https://www.raspberrypi.com/documentation/computers/os.html
+OSはデスクトップ環境なしのLite版を使用する。具体的なリリース番号は固定せず、セットアップ時点でRaspberry Pi公式が提供する安定版を使用する。
 
 ## 3. 前提機材
 
-以下を準備する。
-
 - Raspberry Pi Zero 2 W または Zero W
-- microSDカード
-  - 8GB以上を最低目安とする
-  - 実運用では16GB以上を推奨する
+- microSDカード（8GB以上、実運用16GB以上推奨）
 - 安定した電源
 - Wi-Fiアクセスポイント
-- Raspberry Pi Imagerを実行できるPC
-  - 開発時はmacOSを想定
-- microSDカードをPCへ接続するためのカードリーダー
+- Raspberry Pi Imagerを実行できる開発PC（macOSを想定）
+- microSDカードリーダー
 
-親機は基本的にディスプレイ・キーボードを接続しない **headless運用** とする。
+親機は基本的にディスプレイ・キーボードを接続しないheadless運用とする。
 
-## 4. Raspberry Pi Imagerの準備
+## 4. Raspberry Pi OSの書き込み
 
-PCへRaspberry Pi Imagerをインストールする。
+Raspberry Pi Imagerを使用する。
 
-公式:
+- Zero 2 W: Raspberry Pi OS Lite (64-bit)
+- Zero W: Raspberry Pi OS Lite (32-bit)
 
-- https://www.raspberrypi.com/software/
+OSカスタマイズで以下を設定する。
 
-Raspberry Pi Imagerを起動し、以下を選択する。
+- hostname: `uchi-pulse-hub` を推奨
+- Linuxユーザー: 例 `uchi`
+- Wi-Fi SSID / password
+- Wi-Fi country: 日本国内では `JP`
+- SSH: 有効
+- timezone: 日本国内では `Asia/Tokyo`
 
-### Zero 2 W
+可能であればSSHは公開鍵認証を使用する。パスワード、Wi-Fi認証情報等をリポジトリへ保存しない。
 
-- Device: Raspberry Pi Zero 2 W
-- OS: Raspberry Pi OS Lite (64-bit)
-- Storage: 使用するmicroSDカード
+## 5. 初回起動とSSH接続
 
-### Zero W
-
-- Device: Raspberry Pi Zero W
-- OS: Raspberry Pi OS Lite (32-bit)
-- Storage: 使用するmicroSDカード
-
-書き込み対象のmicroSDカードを誤らないこと。
-
-## 5. Imagerでの初期設定
-
-OS書き込み前にImagerのOSカスタマイズ画面で初期設定を行う。
-
-### 5.1 ホスト名
-
-推奨:
-
-```text
-uchi-pulse-hub
-```
-
-複数の親機を扱う場合は重複しない名称に変更する。
-
-例:
-
-```text
-uchi-pulse-hub-01
-```
-
-### 5.2 ユーザー
-
-専用のLinuxユーザーを設定する。
-
-例:
-
-```text
-uchi
-```
-
-パスワードは十分に強いものを設定する。
-
-パスワードをリポジトリ、設計書、Issue、ログへ記録しない。
-
-### 5.3 Wi-Fi
-
-家庭内Wi-FiのSSIDとパスワードを設定する。
-
-国コードは実際の使用地域に合わせる。
-
-日本国内で使用する場合:
-
-```text
-JP
-```
-
-Uchi-Pulseの子機と親機は、相互にUDP通信可能な同一LANまたは通信可能なネットワークへ接続する。
-
-### 5.4 SSH
-
-SSHを有効化する。
-
-開発時は、可能であれば公開鍵認証を使用する。
-
-初期構築でパスワード認証を使用する場合も、外部インターネットへSSHポートを公開しない。
-
-### 5.5 タイムゾーン
-
-日本国内では以下を使用する。
-
-```text
-Asia/Tokyo
-```
-
-## 6. microSDへの書き込み
-
-ImagerでOSを書き込む。
-
-書き込み後の検証まで正常終了したことを確認し、microSDを安全に取り外す。
-
-microSDをRaspberry Pi Zeroへ挿入する。
-
-## 7. 初回起動
-
-Raspberry Pi Zeroへ電源を接続する。
-
-初回起動時はOSの初期処理とWi-Fi接続が行われる。
-
-PCからホスト名でSSH接続を試す。
-
-例:
+microSDをZeroへ挿入して起動し、開発PCから接続する。
 
 ```bash
 ssh uchi@uchi-pulse-hub.local
 ```
 
-`.local`で名前解決できない場合は、ルーターの管理画面等でZeroへ割り当てられたIPアドレスを確認し、IPアドレスを指定する。
-
-例:
+`.local`で解決できない場合はルーター等でIPアドレスを確認して接続する。
 
 ```bash
 ssh uchi@192.168.1.100
 ```
 
-初回接続時はSSHホスト鍵を確認したうえで接続する。
-
-## 8. OS基本確認
-
-SSH接続後、OSとCPUアーキテクチャを確認する。
+## 6. OS・CPU確認
 
 ```bash
 cat /etc/os-release
@@ -184,84 +70,39 @@ uname -a
 uname -m
 ```
 
-想定例:
+Zero 2 W + 64-bit OSでは `aarch64` であることを確認する。Zero Wでは32-bit Arm環境であることを確認する。
 
-Zero 2 W 64-bit:
-
-```text
-aarch64
-```
-
-Zero W 32-bitでは32-bit Arm環境であることを確認する。
-
-## 9. OS更新
-
-初回セットアップ時にパッケージ情報とOSパッケージを更新する。
+## 7. OS更新
 
 ```bash
 sudo apt update
 sudo apt full-upgrade -y
-```
-
-更新後に再起動が必要な場合:
-
-```bash
 sudo reboot
 ```
 
 再起動後、SSHで再接続する。
 
-## 10. 時刻同期確認
-
-親機ではEVENT履歴等で時刻を使用するため、OS時刻が正しいことを確認する。
+## 8. 時刻同期確認
 
 ```bash
 timedatectl
 ```
 
-以下を確認する。
+Time zone、System clock synchronized、NTP serviceを確認する。EVENT履歴等の時刻に影響するため、時刻同期が正常でない状態で本運用を開始しない。
 
-- Time zoneが意図した地域である
-- System clock synchronizedが有効である
-- NTP serviceが有効である
-
-日本国内の例:
-
-```text
-Time zone: Asia/Tokyo
-```
-
-## 11. ネットワーク確認
-
-IPアドレスを確認する。
+## 9. ネットワーク確認
 
 ```bash
 hostname -I
-```
-
-ネットワークインターフェースを確認する。
-
-```bash
 ip addr
-```
-
-デフォルトルートを確認する。
-
-```bash
 ip route
 ```
 
-Uchi-Pulseでは、子機から親機を安定して参照できるようにする必要がある。
+子機から親機を安定して参照できる必要がある。家庭用ルーターではDHCP予約により親機へ同じIPアドレスを割り当てる方式を推奨する。
 
-親機IPアドレスの固定方法はネットワーク環境によって異なるため、本書ではOS側で固定値を直接設定することを必須としない。
+## 10. Zero側ディレクトリ構成
 
-家庭用ルーターを使用する場合は、DHCP予約により `uchi-pulse-hub` へ同じIPアドレスを割り当てる方式を推奨する。
-
-## 12. Uchi-Pulse実行ディレクトリ
-
-親機プログラムは、アプリケーション本体・設定・可変データを分離する。
-
-標準構成は以下とする。
+標準構成を以下とする。
 
 ```text
 /opt/uchi-pulse/
@@ -269,99 +110,209 @@ Uchi-Pulseでは、子機から親機を安定して参照できるようにす�
     └── uchi-pulse-hub
 
 /etc/uchi-pulse/
-└── （将来の設定ファイル）
+└── uchi-pulse-hub.env
 
 /var/lib/uchi-pulse/
 └── uchi-pulse.db
 ```
 
-役割:
-
 - `/opt/uchi-pulse/bin/`: 実行ファイル
-- `/etc/uchi-pulse/`: 永続設定
+- `/etc/uchi-pulse/`: 永続設定・環境設定
 - `/var/lib/uchi-pulse/`: SQLite DB等の可変データ
+- ログ: 原則systemd/journald
 
-ログは原則としてsystemd/journaldへ出力し、独自ログファイルを必須としない。
+## 11. 実行用ユーザー
 
-## 13. 実行用ユーザー
-
-初期開発段階ではImagerで作成したユーザーから手動実行してもよい。
-
-常時運用段階では、Uchi-Pulse専用のシステムユーザーで実行する構成を推奨する。
-
-例:
+常時運用では専用システムユーザーを使用する。
 
 ```bash
 sudo useradd --system --home /var/lib/uchi-pulse --shell /usr/sbin/nologin uchi-pulse
-```
-
-ディレクトリを作成する。
-
-```bash
-sudo mkdir -p /opt/uchi-pulse/bin
-sudo mkdir -p /etc/uchi-pulse
-sudo mkdir -p /var/lib/uchi-pulse
-```
-
-所有者を設定する。
-
-```bash
+sudo mkdir -p /opt/uchi-pulse/bin /etc/uchi-pulse /var/lib/uchi-pulse
 sudo chown -R uchi-pulse:uchi-pulse /var/lib/uchi-pulse
+sudo chown -R root:root /opt/uchi-pulse /etc/uchi-pulse
+sudo chmod 755 /opt/uchi-pulse /opt/uchi-pulse/bin
+sudo chmod 700 /etc/uchi-pulse
 ```
 
-実行ファイルについてはroot管理とし、サービスユーザーから書き換えられないようにする。
+実行ファイルはroot管理とし、サービスユーザーから書き換えられないようにする。
+
+## 12. クロスビルド方針
+
+Zero上で毎回Rustコンパイルを行わず、開発PCまたはCIで対象アーキテクチャ向けバイナリを作成してZeroへ配置する。
+
+`intrusion-suite/apps/intrusion-gateway/scripts/build-pi.sh` で使用している方式を参考に、Uchi-Pulseでも **Zig + cargo-zigbuild** を標準クロスビルド方式とする。
+
+macOS用バイナリをZeroへコピーしても実行できないため、必ず対象Linuxターゲット向けにビルドする。
+
+## 13. 開発Macへのクロスビルド環境導入
+
+Zigをインストールする。
 
 ```bash
-sudo chown -R root:root /opt/uchi-pulse
-sudo chmod 755 /opt/uchi-pulse
-sudo chmod 755 /opt/uchi-pulse/bin
+brew install zig
 ```
 
-## 14. 親機バイナリの準備
-
-Uchi-Pulse親機はRustで実装する。
-
-通常運用ではZero上でソースコードから毎回コンパイルせず、開発PCまたはCIで対象アーキテクチャ向けに作成した実行ファイルを配置する方式を基本とする。
-
-対象CPUアーキテクチャが異なるため、macOS用にビルドした実行ファイルをそのままZeroへコピーして実行することはできない。
-
-Zero 2 W 64-bitとZero W 32-bitでは対象アーキテクチャが異なるため、それぞれに対応したビルド成果物を使用する。
-
-具体的なRustクロスビルド手順・ターゲットは、親機プログラムのビルド方式確定時に別途定義する。
-
-## 15. バイナリ配置
-
-開発PCから作成済みバイナリを転送する例:
+cargo-zigbuildをインストールする。
 
 ```bash
-scp ./uchi-pulse-hub uchi@uchi-pulse-hub.local:/tmp/uchi-pulse-hub
+cargo install cargo-zigbuild --locked
 ```
 
-ZeroへSSH接続し、正式配置する。
+Rustターゲットを追加する。
+
+Zero 2 W 64-bit:
 
 ```bash
-sudo install -o root -g root -m 755 /tmp/uchi-pulse-hub /opt/uchi-pulse/bin/uchi-pulse-hub
+rustup target add aarch64-unknown-linux-gnu
 ```
 
-配置確認:
+Zero W 32-bit:
 
 ```bash
-ls -l /opt/uchi-pulse/bin/uchi-pulse-hub
+rustup target add arm-unknown-linux-gnueabihf
 ```
 
-## 16. 手動起動確認
+確認:
 
-systemd登録前に、まず手動で親機プログラムが起動することを確認する。
+```bash
+zig version
+cargo zigbuild --version
+rustup target list --installed
+```
 
-実際のCLI引数は親機実装の確定内容に従う。
+## 14. 手動クロスビルド
 
-DBパスを引数または設定で指定できる実装となった場合の概念例:
+リポジトリルートから実行する。
+
+### Zero 2 W / 64-bit
+
+```bash
+cargo zigbuild -p uchi-pulse-hub --release --target aarch64-unknown-linux-gnu
+```
+
+成果物:
+
+```text
+target/aarch64-unknown-linux-gnu/release/uchi-pulse-hub
+```
+
+### Zero W / 32-bit
+
+```bash
+cargo zigbuild -p uchi-pulse-hub --release --target arm-unknown-linux-gnueabihf
+```
+
+成果物:
+
+```text
+target/arm-unknown-linux-gnueabihf/release/uchi-pulse-hub
+```
+
+ビルド後は `file` コマンド等で成果物のアーキテクチャを確認してから配置する。
+
+## 15. Uchi-Pulse用ビルドスクリプト方針
+
+将来的に以下をリポジトリへ配置する。
+
+```text
+apps/uchi-pulse-hub/
+├── scripts/
+│   ├── build-pi.sh
+│   ├── deploy.sh
+│   └── install-service.sh
+├── systemd/
+│   └── uchi-pulse-hub.service
+└── config/
+    └── uchi-pulse-hub.env.example
+```
+
+`build-pi.sh` は `intrusion-suite` と同様に `PI_TARGET` でターゲットを上書き可能にする。
+
+標準値は標準実機であるZero 2 W向けを想定する。
+
+概念例:
+
+```bash
+target="${PI_TARGET:-aarch64-unknown-linux-gnu}"
+cargo zigbuild -p uchi-pulse-hub --release --target "$target"
+```
+
+Zero W向け:
+
+```bash
+PI_TARGET=arm-unknown-linux-gnueabihf ./apps/uchi-pulse-hub/scripts/build-pi.sh
+```
+
+## 16. バイナリ配置
+
+手動配置例:
+
+```bash
+scp target/aarch64-unknown-linux-gnu/release/uchi-pulse-hub \
+  uchi@uchi-pulse-hub.local:/tmp/uchi-pulse-hub
+```
+
+Zero側で正式配置する。
+
+```bash
+sudo install -o root -g root -m 0755 \
+  /tmp/uchi-pulse-hub /opt/uchi-pulse/bin/uchi-pulse-hub
+```
+
+## 17. deploy.shの方針
+
+`intrusion-suite` の `deploy.sh` と同様に、開発PCから以下を一括実行できる構成とする。
+
+1. 対象ターゲットのreleaseバイナリ存在確認
+2. `scp` でZeroの一時領域へ転送
+3. `ssh` で正式配置
+4. systemdサービス再起動
+
+設定値は環境変数で変更可能にする。
+
+```text
+PI_TARGET
+PI_HOST
+PI_TARGET_DIR
+PI_SERVICE
+```
+
+Uchi-Pulseでの想定値:
+
+```text
+PI_HOST=uchi@uchi-pulse-hub.local
+PI_TARGET_DIR=/opt/uchi-pulse/bin
+PI_SERVICE=uchi-pulse-hub.service
+```
+
+本番設定や認証情報をdeployスクリプトへ直接記述しない。
+
+## 18. 環境設定ファイル
+
+認証情報や環境依存設定は、必要に応じてZero側の以下へ配置する。
+
+```text
+/etc/uchi-pulse/uchi-pulse-hub.env
+```
+
+所有者はroot、権限は0600を基本とする。
+
+```bash
+sudo chown root:root /etc/uchi-pulse/uchi-pulse-hub.env
+sudo chmod 600 /etc/uchi-pulse/uchi-pulse-hub.env
+```
+
+Slack/LINE等の秘密情報をGitへコミットしない。リポジトリには値を含まない `.env.example` のみ配置可能とする。
+
+## 19. 手動起動確認
+
+systemd登録前に手動起動を確認する。
+
+CLI仕様確定前の概念例:
 
 ```bash
 /opt/uchi-pulse/bin/uchi-pulse-hub --db /var/lib/uchi-pulse/uchi-pulse.db
 ```
-
-上記はCLI仕様が確定するまで **例示** とし、正式なコマンド仕様とはしない。
 
 確認事項:
 
@@ -372,17 +323,11 @@ DBパスを引数または設定で指定できる実装となった場合の概
 - 登録済み有効デバイスがINITIAL_WAITで初期化される
 - 異常終了しない
 
-## 17. systemdによる自動起動
+## 20. systemdサービス
 
-親機プログラムの起動方法が確定した後、systemdサービスとして登録する。
+`intrusion-suite` のサービス構成を参考に、ネットワーク起動待ち、異常終了時再起動、権限制限を行う。
 
-サービスファイル:
-
-```text
-/etc/systemd/system/uchi-pulse-hub.service
-```
-
-基本形:
+`/etc/systemd/system/uchi-pulse-hub.service` の基本形:
 
 ```ini
 [Unit]
@@ -394,228 +339,171 @@ Wants=network-online.target
 Type=simple
 User=uchi-pulse
 Group=uchi-pulse
-ExecStart=/opt/uchi-pulse/bin/uchi-pulse-hub
 WorkingDirectory=/var/lib/uchi-pulse
+EnvironmentFile=-/etc/uchi-pulse/uchi-pulse-hub.env
+ExecStart=/opt/uchi-pulse/bin/uchi-pulse-hub
 Restart=on-failure
 RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+LimitNOFILE=4096
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-DBパス等の正式な起動引数が決定した場合は `ExecStart` に反映する。
+SQLite DBへ書き込み可能となるよう、`/var/lib/uchi-pulse` の所有権を `uchi-pulse` とする。`ProtectSystem=strict` 採用時も書き込み対象ディレクトリの権限・systemd sandbox設定を実機で検証し、必要なら `ReadWritePaths=/var/lib/uchi-pulse` を追加する。
 
-サービスファイルを作成・変更した後:
+登録:
 
 ```bash
 sudo systemctl daemon-reload
-```
-
-自動起動を有効化する。
-
-```bash
 sudo systemctl enable uchi-pulse-hub
-```
-
-手動起動:
-
-```bash
 sudo systemctl start uchi-pulse-hub
-```
-
-状態確認:
-
-```bash
 systemctl status uchi-pulse-hub
 ```
 
-停止:
+## 21. install-service.shの方針
 
-```bash
-sudo systemctl stop uchi-pulse-hub
-```
+`intrusion-suite` と同様に、開発PCからsystemdユニットと環境設定テンプレートをZeroへ転送し、以下を行うスクリプトを用意する。
 
-再起動:
+- `/etc/uchi-pulse` 作成
+- `/var/lib/uchi-pulse` 作成
+- `/opt/uchi-pulse/bin` 作成
+- systemdユニット配置
+- 初回のみ環境設定ファイル生成
+- `systemctl daemon-reload`
+- `systemctl enable uchi-pulse-hub`
 
-```bash
-sudo systemctl restart uchi-pulse-hub
-```
+既存の実環境設定ファイルを再インストール時に上書きしない。
 
-## 18. ログ確認
-
-systemd/journaldのログを確認する。
-
-直近のログ:
+## 22. ログ確認
 
 ```bash
 journalctl -u uchi-pulse-hub -n 100 --no-pager
-```
-
-リアルタイム確認:
-
-```bash
 journalctl -u uchi-pulse-hub -f
-```
-
-現在の起動以降:
-
-```bash
 journalctl -u uchi-pulse-hub -b --no-pager
 ```
 
-ログへ以下を出力しないこと。
+Wi-Fiパスワード、Slack/LINEトークン、Webhook等の秘密情報をログへ出力しない。
 
-- Wi-Fiパスワード
-- Slack/LINEのアクセストークン等
-- Webhook秘密情報
-- その他認証情報
-
-## 19. 再起動試験
-
-実行環境構築後、Zeroを再起動する。
+## 23. 再起動試験
 
 ```bash
 sudo reboot
 ```
 
-再接続後、以下を確認する。
+再接続後:
 
 ```bash
 systemctl status uchi-pulse-hub
 ```
 
-確認事項:
+以下を確認する。
 
-- Uchi-Pulse Hubが自動起動している
-- SQLite DBが再利用されている
-- DB登録済み有効デバイスから状態管理が再構築されている
-- 通信状態がINITIAL_WAITから開始する
-- 過去のONLINE/OFFLINE状態をSQLiteから復元していない
+- Hubが自動起動している
+- SQLite DBが再利用される
+- 有効デバイスから状態管理が再構築される
+- 通信状態はINITIAL_WAITから開始する
+- 過去のONLINE/OFFLINE状態をSQLiteから復元しない
 
-## 20. UDP実機確認
+## 24. UDP実機確認
 
-親機UDP実装完了後、Pico W / Pico 2 Wとの実通信を確認する。
+Pico W / Pico 2 Wとの実通信で以下を確認する。
 
-確認項目:
+- HELLO / HEARTBEAT / EVENT受信
+- EVENT ACK
+- EVENT重複排除
+- 重複EVENTへのACK再送
+- INITIAL_WAIT / ONLINE / OFFLINE遷移
+- OFFLINEからONLINEへの復帰
 
-- HELLOを受信できる
-- HEARTBEATを受信できる
-- EVENTを受信できる
-- EVENTにACKを返せる
-- 同一EVENT再送を重複排除できる
-- 重複EVENTにもACKを再送できる
-- 正常通信で通信状態がONLINEになる
-- 通信停止時にOFFLINEへ遷移する
-- OFFLINE後の正常通信でONLINEへ復帰する
+具体的仕様は `docs/parent_child_udp_communication_spec.md` を正本とする。
 
-具体的なUDPフィールド、タイムアウト、再送回数は `docs/parent_child_udp_communication_spec.md` を正本とする。
+## 25. Web・通知・CDC実機確認
 
-## 21. Web実機確認
+各機能実装後にZero実機で確認する。
 
-親機Web機能実装後、同一LAN内のPCまたはスマートフォンからWeb画面へアクセスする。
+Web:
+- 同一LANから接続できる
+- 通信状態・入室可否が仕様どおり表示される
 
-確認項目:
+Slack / LINE:
+- ZeroからHTTPS通信できる
+- 通知失敗がUDP ACKを失敗させない
+- 秘密情報をログへ出さない
 
-- 親機Webサーバーへ接続できる
-- 家族用端末の通信状態が表示される
-- 家族用端末の入室可否が表示される
-- 設備用端末に通信状態が表示される
-- 未確認 / オンライン / オフラインが正しく反映される
+USB CDC:
+- 親機CDC実装後、USB Gadget/CDC構成を確認する
+- OS側設定は実装方式確定後に本書へ追記する
 
-具体的な表示仕様は `docs/parent-web-status-design.md` を正本とする。
+## 26. バックアップ
 
-## 22. 外部通知実機確認
-
-Slack / LINE通知実装後に確認する。
-
-- ZeroからインターネットへHTTPS通信できる
-- 設定された通知だけが送信される
-- 通知失敗でUDP ACK処理が失敗しない
-- 認証情報がログへ出ない
-
-通知仕様は関連Issueおよび親機設計書を正本とする。
-
-## 23. USB CDC確認
-
-親機CDC実装後、USB Gadget/CDC構成を確認する。
-
-USB Gadgetに必要なOS設定は実装方式確定後に本書へ追加する。
-
-CDCプロトコル自体は `docs/cdc_communication_spec.md` を正本とする。
-
-## 24. バックアップ
-
-最低限バックアップ対象とするもの:
+最低限の対象:
 
 - `/var/lib/uchi-pulse/uchi-pulse.db`
 - `/etc/uchi-pulse/` 配下の永続設定
 
-実行ファイルはリポジトリまたはビルド成果物から再配置可能とし、バックアップの必須対象とはしない。
-
 DBバックアップはサービス停止中、またはSQLiteの整合性を保証できる方法で取得する。
 
-## 25. アップデート手順
+## 27. アップデート手順
 
-親機プログラム更新時の基本手順:
+基本フロー:
 
 ```text
-新バイナリ作成
+Macでテスト
+  ↓
+Zero向けcargo zigbuild
   ↓
 Zeroへ転送
-  ↓
-サービス停止
   ↓
 必要ならDBバックアップ
   ↓
 バイナリ差し替え
   ↓
-サービス起動
+systemd再起動
   ↓
 status / journal確認
   ↓
 基本通信確認
 ```
 
-バイナリ差し替え前に既存バージョンを一時退避できる運用としてもよい。
+`deploy.sh` 実装後は転送・差し替え・再起動を自動化する。
 
-## 26. 初期構築チェックリスト
+## 28. 初期構築チェックリスト
 
-- [ ] 対象機種を確認した
-- [ ] Zero 2 WではRaspberry Pi OS Lite 64-bitを選択した
-- [ ] Zero WではRaspberry Pi OS Lite 32-bitを選択した
-- [ ] hostnameを設定した
-- [ ] Wi-Fiを設定した
-- [ ] SSHを有効化した
-- [ ] タイムゾーンを設定した
-- [ ] OSを書き込んだ
-- [ ] 初回起動した
+- [ ] 対象機種とOSを確認した
+- [ ] hostname / Wi-Fi / SSH / timezoneを設定した
+- [ ] OSを書き込み初回起動した
 - [ ] SSH接続できた
-- [ ] OSを更新した
-- [ ] 時刻同期を確認した
-- [ ] ネットワークを確認した
-- [ ] `/opt/uchi-pulse/bin` を準備した
-- [ ] `/etc/uchi-pulse` を準備した
-- [ ] `/var/lib/uchi-pulse` を準備した
-- [ ] 親機バイナリを配置した
+- [ ] OS更新・時刻同期・ネットワークを確認した
+- [ ] Zero側ディレクトリと実行ユーザーを準備した
+- [ ] MacへZigを導入した
+- [ ] Macへcargo-zigbuildを導入した
+- [ ] 対象Rustターゲットを導入した
+- [ ] 対象機種向けクロスビルドに成功した
+- [ ] バイナリのアーキテクチャを確認した
+- [ ] Zeroへバイナリを配置した
 - [ ] 手動起動を確認した
 - [ ] systemdサービスを登録した
-- [ ] 自動起動を確認した
 - [ ] journalログを確認した
-- [ ] 再起動後も自動起動した
+- [ ] Zero再起動後も自動起動した
+- [ ] 実装済み機能の実機試験を実施した
 
-## 27. 実装フェーズとの関係
-
-PC上の単体テスト・統合テストと、Zero実機試験を区別する。
+## 29. PCテストと実機試験の関係
 
 ```text
-PC / CI
+Mac / CI
   ↓
 Rustロジックテスト
 SQLiteテスト
-UDP処理テスト
-Web処理テスト
+UDP/Web等のテスト
   ↓
-対象アーキテクチャ向けビルド
+Zig + cargo-zigbuild
+  ↓
+対象アーキテクチャ向けLinuxバイナリ
   ↓
 Raspberry Pi Zero実機
   ↓
@@ -626,21 +514,32 @@ Pico実機との結合試験
 
 PC上ですべてのテストが成功しても、Zero実機での動作確認を最終完了条件から除外しない。
 
-## 28. 今後追記する項目
+## 30. 今後追記・実装する項目
 
-以下は関連実装方式確定後に本書へ追記する。
-
-- Rustクロスビルドの正式ターゲットと手順
-- 配布バイナリの作成方法
-- Hubの正式CLI / 設定ファイル仕様
-- UDP待受ポートのOS側確認手順
-- Web待受アドレス・ポートの確認手順
+- `apps/uchi-pulse-hub/scripts/build-pi.sh` の実装
+- `apps/uchi-pulse-hub/scripts/deploy.sh` の実装
+- `apps/uchi-pulse-hub/scripts/install-service.sh` の実装
+- `apps/uchi-pulse-hub/systemd/uchi-pulse-hub.service` の実装
+- `apps/uchi-pulse-hub/config/uchi-pulse-hub.env.example` の実装
+- Hub正式CLI / 設定ファイル仕様
+- UDP/Web待受ポートのOS側確認手順
 - USB Gadget / CDCのOS設定
-- Slack / LINE認証情報の安全な配置方法
+- Slack / LINE認証情報の正式な配置方法
 - バックアップ・リストアの正式運用
 - Zero W / Zero 2 Wそれぞれの実機試験結果
 
-## 29. 関連設計書
+## 31. 参考実装
+
+クロスビルド・デプロイ・systemd構成の参考:
+
+- `DANA10423/intrusion-suite/apps/intrusion-gateway/scripts/build-pi.sh`
+- `DANA10423/intrusion-suite/apps/intrusion-gateway/scripts/deploy.sh`
+- `DANA10423/intrusion-suite/apps/intrusion-gateway/scripts/install-service.sh`
+- `DANA10423/intrusion-suite/apps/intrusion-gateway/systemd/intrusion-gateway.service`
+
+Uchi-Pulseではディレクトリ、ユーザー、サービス名、バイナリ名をUchi-Pulse用に変更し、設計上の責務を維持する。
+
+## 32. 関連設計書
 
 - `docs/uchi-pulse-system-overview.md`
 - `docs/parent-overview-design.md`
