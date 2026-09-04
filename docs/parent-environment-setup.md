@@ -2,7 +2,7 @@
 
 ## 1. 目的
 
-本書は、Uchi-Pulse 親機として使用する Raspberry Pi Zero W / Zero 2 W について、OSの書き込みから初期設定、SSH接続、Rustクロスビルド、親機プログラムの配置、systemd自動起動、ログ確認、実機試験までの実行環境構築手順を定義する。
+本書は、Uchi-Pulse 親機として使用する Raspberry Pi Zero W / Zero 2 W について、OSの書き込みから初期設定、Wi-Fi接続、SSH接続、Rustクロスビルド、親機プログラムの配置、systemd自動起動、ログ確認、実機試験までの実行環境構築手順を定義する。
 
 本書は親機の実機環境を再現可能にするための運用手順書である。通信仕様・データベース仕様・Web仕様等は各設計書を正本とする。
 
@@ -48,9 +48,23 @@ OSカスタマイズで以下を設定する。
 
 可能であればSSHは公開鍵認証を使用する。パスワード、Wi-Fi認証情報等をリポジトリへ保存しない。
 
+### 4.1 Wi-Fi初期設定
+
+headless運用では、初回起動前にRaspberry Pi ImagerのOSカスタマイズでWi-Fiを設定することを基本とする。
+
+設定する項目:
+
+- SSID
+- Wi-Fiパスワード
+- WLAN country
+
+日本国内ではWLAN countryを `JP` とする。
+
+Wi-Fi認証情報を設計書、Issue、シェルスクリプト、Git管理対象ファイルへ記載しない。
+
 ## 5. 初回起動とSSH接続
 
-microSDをZeroへ挿入して起動し、開発PCから接続する。
+microSDをZeroへ挿入して起動する。Imagerで設定したWi-Fiへ接続されるまで待ち、開発PCから接続する。
 
 ```bash
 ssh uchi@uchi-pulse-hub.local
@@ -61,6 +75,8 @@ ssh uchi@uchi-pulse-hub.local
 ```bash
 ssh uchi@192.168.1.100
 ```
+
+SSH接続できない場合は、まずZeroがWi-Fiへ接続できているかをルーターの接続端末一覧等で確認する。
 
 ## 6. OS・CPU確認
 
@@ -90,7 +106,106 @@ timedatectl
 
 Time zone、System clock synchronized、NTP serviceを確認する。EVENT履歴等の時刻に影響するため、時刻同期が正常でない状態で本運用を開始しない。
 
-## 9. ネットワーク確認
+## 9. Wi-Fi・ネットワーク設定と確認
+
+Raspberry Pi OS Bookworm以降ではNetworkManagerが標準のネットワーク設定ツールであるため、本書では `nmcli` を使用する。
+
+### 9.1 Wi-Fiデバイス確認
+
+```bash
+nmcli device
+```
+
+内蔵Wi-Fiが通常 `wlan0` として認識され、Wi-Fiデバイスとして表示されることを確認する。
+
+Wi-Fi無線の状態を確認する。
+
+```bash
+nmcli radio wifi
+```
+
+`disabled` の場合は有効化する。
+
+```bash
+sudo nmcli radio wifi on
+```
+
+### 9.2 WLAN countryの確認・変更
+
+WLAN countryを変更する必要がある場合は `raspi-config` を使用する。
+
+```bash
+sudo raspi-config
+```
+
+`Localisation Options` → `WLAN Country` から使用地域を設定する。
+
+日本国内では `JP` を選択する。
+
+### 9.3 周辺Wi-Fiの検索
+
+```bash
+nmcli dev wifi list
+```
+
+接続するSSIDが一覧に表示されることを確認する。
+
+### 9.4 Wi-Fiへ接続
+
+パスワードをコマンドラインへ直接記述するとシェル履歴等へ残る可能性があるため、対話入力を使用する。
+
+```bash
+sudo nmcli --ask dev wifi connect "<SSID>"
+```
+
+表示されたプロンプトでWi-Fiパスワードを入力する。
+
+接続後に確認する。
+
+```bash
+nmcli dev wifi list
+```
+
+対象SSIDの `IN-USE` に `*` が表示されていることを確認する。
+
+接続状態は次でも確認できる。
+
+```bash
+nmcli connection show --active
+```
+
+### 9.5 Wi-Fi接続先を変更する場合
+
+Zeroを別のWi-Fiへ移動する場合も、周辺SSIDを確認してから同じ方法で接続する。
+
+```bash
+nmcli dev wifi list
+sudo nmcli --ask dev wifi connect "<NEW_SSID>"
+```
+
+SSH経由で接続先を変更すると、Wi-Fi切替時に現在のSSH接続が切断される可能性がある。新しいネットワークへ接続後、新しいIPアドレスまたは `.local` ホスト名で再接続する。
+
+現在登録されている接続設定は以下で確認する。
+
+```bash
+nmcli connection show
+```
+
+不要な接続設定を削除する場合は、対象の接続名を十分確認したうえで実行する。
+
+```bash
+sudo nmcli connection delete "<CONNECTION_NAME>"
+```
+
+### 9.6 隠しSSIDへ接続する場合
+
+必要な場合のみ以下を使用する。
+
+```bash
+sudo nmcli --ask dev wifi connect "<SSID>" hidden yes
+```
+
+### 9.7 IPアドレス・経路確認
 
 ```bash
 hostname -I
@@ -98,7 +213,32 @@ ip addr
 ip route
 ```
 
+以下を確認する。
+
+- `wlan0` にIPアドレスが割り当てられている
+- デフォルトルートが存在する
+- 開発PCからSSH接続できる
+- 子機と親機が相互にUDP通信可能なネットワークに存在する
+
 子機から親機を安定して参照できる必要がある。家庭用ルーターではDHCP予約により親機へ同じIPアドレスを割り当てる方式を推奨する。
+
+### 9.8 再起動後のWi-Fi確認
+
+設定後、一度再起動して自動再接続を確認する。
+
+```bash
+sudo reboot
+```
+
+再起動後、SSHで再接続し、以下を確認する。
+
+```bash
+nmcli connection show --active
+hostname -I
+ip route
+```
+
+Wi-Fiへ自動接続し、想定したネットワーク経由で通信できることを確認する。
 
 ## 10. Zero側ディレクトリ構成
 
@@ -477,8 +617,12 @@ status / journal確認
 - [ ] 対象機種とOSを確認した
 - [ ] hostname / Wi-Fi / SSH / timezoneを設定した
 - [ ] OSを書き込み初回起動した
+- [ ] Wi-Fiへ接続できた
+- [ ] `nmcli` で接続SSIDを確認した
+- [ ] IPアドレスとデフォルトルートを確認した
+- [ ] 再起動後もWi-Fiへ自動接続した
 - [ ] SSH接続できた
-- [ ] OS更新・時刻同期・ネットワークを確認した
+- [ ] OS更新・時刻同期を確認した
 - [ ] Zero側ディレクトリと実行ユーザーを準備した
 - [ ] MacへZigを導入した
 - [ ] Macへcargo-zigbuildを導入した
@@ -528,7 +672,7 @@ PC上ですべてのテストが成功しても、Zero実機での動作確認�
 - バックアップ・リストアの正式運用
 - Zero W / Zero 2 Wそれぞれの実機試験結果
 
-## 31. 参考実装
+## 31. 参考実装・参考資料
 
 クロスビルド・デプロイ・systemd構成の参考:
 
@@ -536,6 +680,8 @@ PC上ですべてのテストが成功しても、Zero実機での動作確認�
 - `DANA10423/intrusion-suite/apps/intrusion-gateway/scripts/deploy.sh`
 - `DANA10423/intrusion-suite/apps/intrusion-gateway/scripts/install-service.sh`
 - `DANA10423/intrusion-suite/apps/intrusion-gateway/systemd/intrusion-gateway.service`
+
+Wi-Fi設定はRaspberry Pi公式ドキュメントのNetworkManager / `nmcli` 手順に従う。
 
 Uchi-Pulseではディレクトリ、ユーザー、サービス名、バイナリ名をUchi-Pulse用に変更し、設計上の責務を維持する。
 
