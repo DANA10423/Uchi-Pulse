@@ -3,6 +3,7 @@
 pub use uchi_pulse_common as common_protocol;
 
 pub mod action;
+pub mod cdc;
 pub mod db;
 pub mod state;
 pub mod udp;

@@ -2,6 +2,7 @@
 members = [
     "apps/uchi-pulse-node",
     "apps/uchi-pulse-hub",
+    "apps/uchi-pulse-control",
     "crates/uchi-pulse-common",
 ]
 resolver = "2"

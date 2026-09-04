@@ -6,6 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uchi_pulse_hub::{
     DEFAULT_BIND_ADDR, DEFAULT_DB_PATH, DEFAULT_HELLO_REQUEST_ADDR, DEFAULT_OFFLINE_TIMEOUT_SEC,
     action::ActionEngine,
+    cdc::spawn_server,
     db::Database,
     udp::{ActionExecutionStatus, HubUdpProcessor, PacketOutcome, encode_hello_request},
 };
@@ -15,6 +16,7 @@ struct HubConfig {
     db_path: String,
     hello_request_addr: String,
     offline_timeout: Duration,
+    cdc_device: Option<String>,
 }
 
 impl HubConfig {
@@ -34,6 +36,7 @@ impl HubConfig {
             .transpose()?
             .map(Duration::from_secs)
             .unwrap_or_else(|| Duration::from_secs(DEFAULT_OFFLINE_TIMEOUT_SEC));
+        let mut cdc_device = env::var("UCHI_PULSE_CDC_DEVICE").ok();
 
         let mut args = env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -59,9 +62,12 @@ impl HubConfig {
                             .map_err(|_| "--offline-timeout-sec must be an integer")?,
                     );
                 }
+                "--cdc-device" => {
+                    cdc_device = Some(args.next().ok_or("--cdc-device requires a path")?);
+                }
                 "--help" | "-h" => {
                     println!(
-                        "Usage: uchi-pulse-hub [--bind ADDR] [--db PATH] [--hello-request-addr ADDR] [--offline-timeout-sec SECONDS]"
+                        "Usage: uchi-pulse-hub [--bind ADDR] [--db PATH] [--hello-request-addr ADDR] [--offline-timeout-sec SECONDS] [--cdc-device PATH]"
                     );
                     println!(
                         "Defaults: bind={DEFAULT_BIND_ADDR}, db={DEFAULT_DB_PATH}, hello-request={DEFAULT_HELLO_REQUEST_ADDR}, offline-timeout={} seconds",
@@ -78,6 +84,7 @@ impl HubConfig {
             db_path,
             hello_request_addr,
             offline_timeout,
+            cdc_device,
         })
     }
 }
@@ -86,6 +93,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = HubConfig::from_args()
         .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
     let database = Database::open(&config.db_path)?;
+    let _cdc_thread = config
+        .cdc_device
+        .as_ref()
+        .map(|path| spawn_server(path.clone(), config.db_path.clone()));
     let socket = UdpSocket::bind(&config.bind_addr)?;
     socket.set_broadcast(true)?;
     socket.set_read_timeout(Some(Duration::from_secs(1)))?;

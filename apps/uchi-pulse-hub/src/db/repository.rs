@@ -126,6 +126,16 @@ impl Database {
             .map_err(DatabaseError::from)
     }
 
+    pub fn list_actions(&self) -> Result<Vec<ActionRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT action_id, action_name, target_type, target_family_id, web_message, enabled
+             FROM actions ORDER BY action_id",
+        )?;
+        let rows = statement.query_map([], row_to_action)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(DatabaseError::from)
+    }
+
     pub fn update_family(&self, family: &FamilyRecord) -> Result<bool> {
         let changed = self.connection.execute(
             "UPDATE families SET display_name = ?2, enabled = ?3 WHERE family_id = ?1",

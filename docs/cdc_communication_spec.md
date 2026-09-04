@@ -150,6 +150,44 @@ Uchi-PulseにおけるUSB CDC通信の共通仕様と、親機・子機それぞ
 
 Action対象家族と通知先家族は別概念とする。
 
+### 5.4 親機設定JSON
+親機の `get_config.data` および `set_config.params` は、次のオブジェクトとする。
+
+```json
+{
+  "families": [
+    { "family_id": 1, "display_name": "太郎", "enabled": true }
+  ],
+  "actions": [
+    {
+      "action_id": 10,
+      "action_name": "ご飯通知",
+      "target_type": "FAMILY",
+      "target_family_id": 1,
+      "web_message": "ご飯です",
+      "enabled": true,
+      "state_changes": [
+        { "state_type": "MEAL_NOTICE", "state_value": "ON" }
+      ],
+      "notification_enabled": false,
+      "notification_message": null,
+      "notification_targets": []
+    }
+  ],
+  "family_notification_destinations": [
+    {
+      "family_id": 1,
+      "notification_type": "LINE",
+      "destination": "line-user-id",
+      "enabled": true
+    }
+  ]
+}
+```
+
+`set_config`は、家族・Action・状態変更・通知設定・通知先を検証したうえで、親機の
+SQLiteへ保存する。イベント履歴および子機の通信状態は設定JSONに含めない。
+
 ## 6. 設定反映
 `set_config` は設定値を検証して永続保存する。原則として設定変更は次回起動時に反映する。
 

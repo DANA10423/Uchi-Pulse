@@ -10,3 +10,5 @@ license = "MIT OR Apache-2.0"
 uchi-pulse-common = { path = "../../crates/uchi-pulse-common" }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1.0.203", features = ["derive"] }
+serde_json = "1.0.151"
+serialport = "4.9.0"

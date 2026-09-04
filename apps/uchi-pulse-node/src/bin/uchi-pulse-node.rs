@@ -46,6 +46,8 @@ mod firmware {
     const FLASH_SIZE: usize = 2 * 1024 * 1024;
     const CONFIG_STORAGE_OFFSET: u32 = (FLASH_SIZE - CONFIG_STORAGE_SIZE) as u32;
     const AVAILABLE_GPIO_COUNT: usize = 26;
+    const CONFIG_RECORD_MAGIC: u32 = 0x5543_4647;
+    const CONFIG_RECORD_HEADER_SIZE: usize = 8;
     type NodeFlash = Flash<'static, FLASH, Blocking, FLASH_SIZE>;
     type FirmwareCdcHandler = CdcCommandHandler<FlashConfigStorage>;
 
@@ -57,6 +59,7 @@ mod firmware {
     enum FlashStorageError {
         Flash(embassy_rp::flash::Error),
         TooLarge,
+        VerifyFailed,
     }
 
     impl FlashConfigStorage {
@@ -69,26 +72,56 @@ mod firmware {
         type Error = FlashStorageError;
 
         fn read(&mut self, destination: &mut [u8]) -> Result<usize, Self::Error> {
+            let mut record = [0xff_u8; CONFIG_STORAGE_SIZE];
             self.flash
-                .blocking_read(CONFIG_STORAGE_OFFSET, destination)
+                .blocking_read(CONFIG_STORAGE_OFFSET, &mut record)
                 .map_err(FlashStorageError::Flash)?;
-            Ok(destination
-                .iter()
-                .position(|byte| *byte == 0xff)
-                .unwrap_or(destination.len()))
+            if record.len() < CONFIG_RECORD_HEADER_SIZE
+                || u32::from_le_bytes(record[..4].try_into().unwrap()) != CONFIG_RECORD_MAGIC
+            {
+                return Ok(0);
+            }
+            let length = u16::from_le_bytes(record[4..6].try_into().unwrap()) as usize;
+            if length == 0
+                || length > CONFIG_STORAGE_SIZE - CONFIG_RECORD_HEADER_SIZE
+                || length > destination.len()
+            {
+                return Ok(0);
+            }
+            destination[..length].copy_from_slice(
+                &record[CONFIG_RECORD_HEADER_SIZE..CONFIG_RECORD_HEADER_SIZE + length],
+            );
+            Ok(length)
         }
 
         fn write(&mut self, data: &[u8]) -> Result<(), Self::Error> {
-            if data.len() > CONFIG_STORAGE_SIZE {
+            if data.is_empty() || data.len() > CONFIG_STORAGE_SIZE - CONFIG_RECORD_HEADER_SIZE {
                 return Err(FlashStorageError::TooLarge);
             }
+            let mut record = [0xff_u8; CONFIG_STORAGE_SIZE];
+            record[..4].copy_from_slice(&CONFIG_RECORD_MAGIC.to_le_bytes());
+            record[4..6].copy_from_slice(&(data.len() as u16).to_le_bytes());
+            record[CONFIG_RECORD_HEADER_SIZE..CONFIG_RECORD_HEADER_SIZE + data.len()]
+                .copy_from_slice(data);
             let end = CONFIG_STORAGE_OFFSET + CONFIG_STORAGE_SIZE as u32;
             self.flash
                 .blocking_erase(CONFIG_STORAGE_OFFSET, end)
                 .map_err(FlashStorageError::Flash)?;
             self.flash
-                .blocking_write(CONFIG_STORAGE_OFFSET, data)
-                .map_err(FlashStorageError::Flash)
+                .blocking_write(
+                    CONFIG_STORAGE_OFFSET,
+                    &record[..CONFIG_RECORD_HEADER_SIZE + data.len()],
+                )
+                .map_err(FlashStorageError::Flash)?;
+
+            let mut verify = [0_u8; CONFIG_RECORD_HEADER_SIZE];
+            self.flash
+                .blocking_read(CONFIG_STORAGE_OFFSET, &mut verify)
+                .map_err(FlashStorageError::Flash)?;
+            if verify != record[..CONFIG_RECORD_HEADER_SIZE] {
+                return Err(FlashStorageError::VerifyFailed);
+            }
+            Ok(())
         }
 
         fn clear(&mut self) -> Result<(), Self::Error> {
