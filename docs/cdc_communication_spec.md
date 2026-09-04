@@ -83,22 +83,12 @@
 
 同じGPIOについて `OFF_TO_ON` と `ON_TO_OFF` に別のAction IDを設定できる。
 
-概念例:
-
-```json
-{
-  "gpio": 5,
-  "edge": "OFF_TO_ON",
-  "action_id": 1
-}
-```
-
 ### 5.3 子機CDCで設定しない情報
 
 以下は親機側の情報であり、子機へ設定しない。
 
 - Action名・意味
-- Action種別
+- `target_type`
 - Action対象家族
 - 対象者表示名
 - Web表示メッセージ
@@ -119,14 +109,28 @@
 
 ### 6.2 Action定義
 
-親機側ではAction IDに対して次の意味情報を管理する。
+親機側ではAction IDごとに次の情報を管理する。
 
-- Action種別
-- Action名
-- 対象家族（Action種別により必要）
-- Web表示メッセージ
-- 状態変更内容
-- 有効／無効
+- `action_name`
+- `target_type` (`FAMILY` / `COMMON`)
+- `target_family_id`
+- `web_message`
+- `state_type`
+- `state_value`
+- `enabled`
+
+`FAMILY` Actionでは `target_family_id` を必須とし、対象家族ごとに別Action IDを登録する。
+
+同じAction内容でも対象家族が異なる場合は別Action IDとする。
+
+```text
+Action ID 4 = 父 / 入室NG
+Action ID 5 = 母 / 入室NG
+```
+
+1つのAction IDに複数の対象家族は登録しない。
+
+`COMMON` Actionでは `target_family_id = NULL` とする。
 
 Web表示メッセージにはデフォルト値を用意し、親機CDCで変更可能とする。
 
@@ -138,7 +142,7 @@ Web表示メッセージにはデフォルト値を用意し、親機CDCで変�
 - `display_name`
 - `enabled`
 
-Actionは必要に応じて `target_family_id` で家族マスタを参照する。
+FAMILY Actionは `target_family_id` で家族マスタを参照する。
 
 ### 6.4 通知設定
 
@@ -170,8 +174,8 @@ GPIO
 Action ID
       ↓
 Action定義
- + Action種別
- + 対象家族（必要な種別のみ）
+ + target_type
+ + target_family_id
  + Web表示
  + 状態変更
       ↓
@@ -190,8 +194,6 @@ Action定義
 
 子機ではFlash等へ保存し、親機ではLinux上の永続ストレージ（SQLite等）へ保存する。
 
-保存媒体は異なるが、CDCから見た要求・応答形式は共通とする。
-
 ---
 
 ## 9. エラー
@@ -207,7 +209,7 @@ Action定義
 - `OPERATION_FAILED`
 - `NOT_SUPPORTED`
 
-親機ではAction種別と対象家族の整合性等も設定検証対象とする。子機ではGPIO番号、`edge`、Action IDの形式等を検証対象とする。
+親機では `target_type` と `target_family_id` の整合性も設定検証対象とする。子機ではGPIO番号、`edge`、Action IDの形式等を検証対象とする。
 
 ---
 
@@ -217,4 +219,4 @@ Action定義
 - `docs/parent_child_udp_communication_spec.md`
 - `docs/parent-database-design.md`
 
-Actionの具体的な採番やサービス固有通知仕様は詳細設計で別途定義する。
+Action IDはAction定義ごとに一意に割り当て、FAMILY Actionは対象家族ごとに別Action IDとする。
