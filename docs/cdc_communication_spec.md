@@ -69,16 +69,26 @@ Uchi-PulseにおけるUSB CDC通信の共通仕様と、親機・子機それぞ
 
 子機のAction入力割当は `GPIO + Input Event + Action ID` とする。
 
-### 4.2 子機設定例
+### 4.2 GPIO入力設定
+- `gpio_inputs` は最大10件まで設定できる。
+- GPIO番号は固定の2/3/4ではなく、Pico W / Pico 2 Wの外部端子として利用可能なGPIOから任意に指定できる。
+- 対応GPIOは `0`〜`22`、`26`、`27`、`28` とする。
+- `23`、`24`、`25`、`29` はオンボードCYW43 Wi-Fi接続で使用するため、子機入力には指定できない。
+- 同一GPIOを `gpio_inputs` に重複登録してはならない。
+- `input_mappings` が参照するGPIOは、必ず `gpio_inputs` に登録されていなければならない。
+
+### 4.3 子機設定例
 ```json
 {
   "device_id": "node-01",
   "gpio_inputs": [
-    { "gpio": 2, "active_high": false, "debounce_ms": 30 }
+    { "gpio": 0, "active_high": false, "debounce_ms": 30 },
+    { "gpio": 5, "active_high": false, "debounce_ms": 30 },
+    { "gpio": 28, "active_high": false, "debounce_ms": 30 }
   ],
   "input_mappings": [
     {
-      "gpio": 2,
+      "gpio": 5,
       "input_event": "CLICK",
       "action_id": 10,
       "enabled": true
@@ -104,7 +114,7 @@ Uchi-PulseにおけるUSB CDC通信の共通仕様と、親機・子機それぞ
 - `ack_timeout_ms`: デフォルト60000ms
 - `event_retry_count`: デフォルト3回
 - `heartbeat_interval_sec`: デフォルト180秒
-- 両設定は取得・変更・永続保存可能とする。
+- 各設定は取得・変更・永続保存可能とする。
 - `CLICK` と `DOUBLE_CLICK` は同一操作から重複発生させない。
 
 子機はAction名、対象家族、状態変更、Web表示、通知設定、通知先を保持・解釈しない。
