@@ -109,21 +109,27 @@ GPIO 8 / ON_TO_OFF    / Action ID 21
 
 ### 3.3 基本Actionパターン
 
-初期版では次の7種類を基本Actionパターンとして用意する。
+初期版では次の11種類を基本Actionパターンとして用意する。
 
 | Action | target_type | state_type | state_value | デフォルトWebメッセージ |
 |---|---|---|---|---|
 | ご飯通知 | `FAMILY` | `MEAL_NOTICE` | `ON` | `{target}：ご飯です` |
 | ご飯通知クリア | `FAMILY` | `MEAL_NOTICE` | `OFF` | `{target}：ご飯通知を解除しました` |
+| おやつ通知 | `FAMILY` | `SNACK_NOTICE` | `ON` | `{target}：おやつです` |
+| おやつ通知クリア | `FAMILY` | `SNACK_NOTICE` | `OFF` | `{target}：おやつ通知を解除しました` |
+| HELP通知 | `FAMILY` | `HELP_NOTICE` | `ON` | `{target}：HELPです` |
+| HELP通知クリア | `FAMILY` | `HELP_NOTICE` | `OFF` | `{target}：HELP通知を解除しました` |
 | 入室OK | `FAMILY` | `ENTRY_PERMISSION` | `OK` | `{target}：入室OK` |
 | 入室NG | `FAMILY` | `ENTRY_PERMISSION` | `NG` | `{target}：入室NG` |
 | 会議中 | `FAMILY` | `ENTRY_PERMISSION` | `MEETING` | `{target}：会議中` |
 | ポスト投函 | `COMMON` | `MAILBOX` | `ON` | `ポストに投函がありました` |
 | ポスト投函解除 | `COMMON` | `MAILBOX` | `OFF` | `ポストの投函状態を解除しました` |
 
-この7種類は固定Action IDではない。
+この11種類は固定Action IDではない。
 
-FAMILYの5種類は必要な家族ごとにAction定義を作成する。COMMONの2種類は対象家族を持たない。
+FAMILYの9種類は必要な家族ごとにAction定義を作成する。COMMONの2種類は対象家族を持たない。
+
+ご飯通知、おやつ通知、HELP通知はそれぞれ独立した状態として扱い、各クリアActionで `OFF` に変更する。
 
 「会議中」の解除専用Actionは設けず、対象家族の `入室OK` Actionを使用する。
 
