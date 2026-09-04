@@ -13,7 +13,7 @@ PHASE 6/7/8では、GPIO入力から共通Input Eventを判定し、設定され
 - EVENT ACK待機（60秒）と同一EVENTの最大3回再送
 - 親機の `HELLO_REQUEST` ブロードキャストによる親機自動探索
 - 発見した親機エンドポイントへの180秒間隔のHEARTBEAT
-- USB CDCのLF区切りJSON（`get_config` / `set_config` / `factory_reset` / `reboot`）
+- USB CDCのLF区切りJSON（`get_config` / `set_config` / `get_status` / `factory_reset` / `reboot`）
 - 設定のvalidation、Flash保存、次回起動時の復元
 
 GPIO 23/24/25/29 はオンボードCYW43 Wi-Fi接続で使用するため、GPIO入力設定の対象外です。
@@ -24,6 +24,7 @@ UDPは正式な共通wire formatを使用します。GPIO番号、Input Event、
 先に `firmware/README.md` の CYW43439 ファームウェアを配置してください。
 初回起動時は `src/config.rs` の既定SSID・パスワード（`change-me`）が使われます。
 実運用のWi-Fi/IP設定はUSB CDCの `set_config` で設定してください。
+`get_status` では、DHCP取得後を含む子機自身の現在のIPv4アドレスを確認できます。
 
 ```sh
 # Pico W (RP2040)

@@ -8,6 +8,8 @@ fn main() {
 
 #[cfg(all(feature = "firmware", target_os = "none"))]
 mod firmware {
+    use core::fmt::Write as _;
+
     use cyw43::{JoinOptions, aligned_bytes};
     use cyw43_pio::{DEFAULT_CLOCK_DIVIDER, PioSpi};
     use defmt::{info, warn};
@@ -33,7 +35,9 @@ mod firmware {
     use uchi_pulse_node::cdc::{
         CdcAction, CdcLineParser, MAX_CDC_LINE_SIZE, NodeCdcHandler as CdcCommandHandler,
     };
-    use uchi_pulse_node::config::{DEFAULT_CONFIG, NetworkMode, PersistedNodeConfig, parse_ipv4};
+    use uchi_pulse_node::config::{
+        DEFAULT_CONFIG, Ipv4Text, NetworkMode, PersistedNodeConfig, parse_ipv4,
+    };
     use uchi_pulse_node::input::{InputController, TriggeredAction};
     use uchi_pulse_node::storage::{CONFIG_STORAGE_SIZE, ConfigManager, ConfigStorage};
     use uchi_pulse_node::udp::{NodeUdpProtocol, PendingEvent, RetryPolicy, is_hello_request};
@@ -371,6 +375,7 @@ mod firmware {
         mut class: CdcAcmClass<'static, embassy_rp::usb::Driver<'static, USB>>,
         mut handler: FirmwareCdcHandler,
         mut watchdog: embassy_rp::watchdog::Watchdog,
+        stack: embassy_net::Stack<'static>,
     ) -> ! {
         let mut parser = CdcLineParser::new();
         let mut packet = [0_u8; 64];
@@ -387,7 +392,11 @@ mod firmware {
                 };
                 let _ = parser.feed(&packet[..length]);
                 while let Some(line) = parser.pop_line() {
-                    let result = match handler.handle_line(line.as_slice(), &mut response) {
+                    let result = match handler.handle_line_with_status(
+                        line.as_slice(),
+                        &mut response,
+                        current_ip_address(&stack),
+                    ) {
                         Ok(result) => result,
                         Err(_) => continue,
                     };
@@ -412,6 +421,14 @@ mod firmware {
                 }
             }
         }
+    }
+
+    fn current_ip_address(stack: &embassy_net::Stack<'static>) -> Option<Ipv4Text> {
+        let config = stack.config_v4()?;
+        let ip_address = config.address.address();
+        let mut text = Ipv4Text::new();
+        write!(&mut text, "{ip_address}").ok()?;
+        Some(text)
     }
 
     #[embassy_executor::main(
@@ -445,14 +462,6 @@ mod firmware {
         let cdc_class = CdcAcmClass::new(&mut usb_builder, CDC_STATE.init(CdcState::new()), 64);
         let usb_device = usb_builder.build();
         spawner.spawn(usb_device_task(usb_device).unwrap());
-        spawner.spawn(
-            cdc_task(
-                cdc_class,
-                cdc_handler,
-                embassy_rp::watchdog::Watchdog::new(p.WATCHDOG),
-            )
-            .unwrap(),
-        );
         let mut rng = RoscRng;
         let boot_id = rng.next_u64();
 
@@ -498,6 +507,15 @@ mod firmware {
             rng.next_u64(),
         );
         spawner.spawn(net_task(runner).unwrap());
+        spawner.spawn(
+            cdc_task(
+                cdc_class,
+                cdc_handler,
+                embassy_rp::watchdog::Watchdog::new(p.WATCHDOG),
+                stack,
+            )
+            .unwrap(),
+        );
 
         while let Err(err) = control
             .join(

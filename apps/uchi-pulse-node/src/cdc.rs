@@ -10,7 +10,7 @@ use uchi_pulse_common::codec::{CodecError, decode_line, encode_line};
 use uchi_pulse_common::types::{RequestId, text};
 
 use crate::config::{
-    ConfigValidationError, GpioInputConfig, InputMapping, MAX_PERSISTED_GPIO_INPUTS,
+    ConfigValidationError, GpioInputConfig, InputMapping, Ipv4Text, MAX_PERSISTED_GPIO_INPUTS,
     MAX_PERSISTED_INPUT_MAPPINGS, NetworkConfig, PersistedNodeConfig, WifiConfig,
 };
 use crate::storage::{ConfigManager, ConfigManagerError, ConfigStorage};
@@ -149,6 +149,13 @@ impl From<&PersistedNodeConfig> for NodeCdcParams {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EmptyData {}
 
+/// Runtime status returned by the child CDC endpoint.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NodeCdcStatus {
+    pub device_id: uchi_pulse_common::DeviceId,
+    pub ip_address: Option<Ipv4Text>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CdcAction {
     None,
@@ -195,6 +202,15 @@ impl<S: ConfigStorage> NodeCdcHandler<S> {
         line: &[u8],
         destination: &mut [u8],
     ) -> Result<CdcHandleResult, CdcHandlerError> {
+        self.handle_line_with_status(line, destination, None)
+    }
+
+    pub fn handle_line_with_status(
+        &mut self,
+        line: &[u8],
+        destination: &mut [u8],
+        ip_address: Option<Ipv4Text>,
+    ) -> Result<CdcHandleResult, CdcHandlerError> {
         let request: CdcRequest<NodeCdcParams> = match decode_line(line) {
             Ok(request) => request,
             Err(_) => {
@@ -237,6 +253,21 @@ impl<S: ConfigStorage> NodeCdcHandler<S> {
                     CDC_PROTOCOL_VERSION,
                     request_id,
                     self.manager.config().clone(),
+                ),
+                destination,
+            )
+            .map(|response_len| CdcHandleResult {
+                response_len,
+                action: CdcAction::None,
+            }),
+            "get_status" => encode_response(
+                CdcResponse::success(
+                    CDC_PROTOCOL_VERSION,
+                    request_id,
+                    NodeCdcStatus {
+                        device_id: self.manager.config().device_id.clone(),
+                        ip_address,
+                    },
                 ),
                 destination,
             )
@@ -319,7 +350,7 @@ impl<S: ConfigStorage> NodeCdcHandler<S> {
                 response_len,
                 action: CdcAction::Reboot,
             }),
-            "get_info" | "get_status" | "get_inputs" | "get_outputs" => self.error_response(
+            "get_info" | "get_inputs" | "get_outputs" => self.error_response(
                 request_id,
                 CdcErrorCode::NotSupported,
                 "command is not supported on the node yet",
@@ -455,6 +486,21 @@ mod tests {
         (result, response)
     }
 
+    fn send_status(
+        handler: &mut NodeCdcHandler<MemoryConfigStorage<CONFIG_STORAGE_SIZE>>,
+        request: CdcRequest<NodeCdcParams>,
+        ip_address: Option<Ipv4Text>,
+    ) -> (CdcHandleResult, CdcResponse<NodeCdcStatus>) {
+        let mut input = [0; 4096];
+        let used = encode_line(&request, &mut input).unwrap();
+        let mut output = [0; 4096];
+        let result = handler
+            .handle_line_with_status(&input[..used], &mut output, ip_address)
+            .unwrap();
+        let response = decode_line(&output[..result.response_len]).unwrap();
+        (result, response)
+    }
+
     #[test]
     fn get_config_returns_defaults_and_preserves_request_id() {
         let mut handler = handler();
@@ -584,11 +630,32 @@ mod tests {
     }
 
     #[test]
+    fn get_status_returns_runtime_ip_address() {
+        let mut handler = handler();
+        let (_, response) = send_status(
+            &mut handler,
+            request("get_status", NodeCdcParams::default()),
+            Some(text("192.168.1.42").unwrap()),
+        );
+        assert_eq!(response.status, CdcStatus::Ok);
+        let status = response.data.unwrap();
+        assert_eq!(status.device_id.as_str(), "family-node-01");
+        assert_eq!(status.ip_address.unwrap().as_str(), "192.168.1.42");
+
+        let (_, response) = send_status(
+            &mut handler,
+            request("get_status", NodeCdcParams::default()),
+            None,
+        );
+        assert_eq!(response.data.unwrap().ip_address, None);
+    }
+
+    #[test]
     fn unsupported_commands_and_reboot_have_explicit_boundaries() {
         let mut handler = handler();
         let (result, response) = send_empty(
             &mut handler,
-            request("get_status", NodeCdcParams::default()),
+            request("get_inputs", NodeCdcParams::default()),
         );
         assert_eq!(response.error.unwrap().code, CdcErrorCode::NotSupported);
         assert_eq!(result.action, CdcAction::None);
