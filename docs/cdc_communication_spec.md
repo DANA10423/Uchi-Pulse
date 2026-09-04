@@ -88,12 +88,27 @@
 
 ### 5.4 操作判定設定
 
-`CLICK` / `DOUBLE_CLICK` / `LONG_PRESS` を判定するため、子機設定には少なくとも以下の時間パラメータを持てる構造とする。
+`CLICK` / `DOUBLE_CLICK` / `LONG_PRESS` を判定するため、子機設定に以下を持つ。
 
-- ダブルクリック判定時間
-- 長押し判定時間
+| 項目 | 単位 | デフォルト | 内容 |
+|---|---:|---:|---|
+| `double_click_interval_ms` | ms | 400 | 1回目のクリック後、2回目のクリックを待つ時間 |
+| `long_press_threshold_ms` | ms | 1000 | 押下継続を長押しと判定する時間 |
 
-具体的な設定フィールド名、単位、デフォルト値は詳細設計で確定する。
+両項目は子機CDCの `get_config` / `set_config` で取得・変更でき、子機の永続設定として保存する。
+
+設定例:
+
+```json
+{
+  "double_click_interval_ms": 400,
+  "long_press_threshold_ms": 1000
+}
+```
+
+`CLICK` は、1回目のクリック後 `double_click_interval_ms` 内に2回目のクリックが成立しなかった時点で確定する。2回目が成立した場合は `DOUBLE_CLICK` とし、同じ操作について `CLICK` を重複発生させない。
+
+`LONG_PRESS` は押下状態が `long_press_threshold_ms` 以上継続した場合に成立する。
 
 ### 5.5 子機CDCで設定しない情報
 
@@ -140,6 +155,7 @@ Action定義はAction IDごとに以下を保持する。
 GPIO
  + Input Event
  + Action ID
+ + 操作判定時間
       ↓
 通常運用時にUDP EVENTとしてAction ID送信
 
@@ -182,7 +198,7 @@ Input Eventの判定は子機で完了し、親機やUDP層へInput Eventその�
 - `OPERATION_FAILED`
 - `NOT_SUPPORTED`
 
-子機ではGPIO番号、`input_event`、Action ID、操作判定時間設定等を検証対象とする。
+子機ではGPIO番号、`input_event`、Action ID、`double_click_interval_ms`、`long_press_threshold_ms` 等を検証対象とする。
 
 ---
 
