@@ -33,9 +33,22 @@ GPIO入力から生成するイベントを `Input Event` と呼ぶ。初期版�
 
 各GPIOの各Input Eventに独立してAction IDを割り当てられる。
 
-ダブルクリック判定時間と長押し判定時間は子機設定値として保持できる設計とし、具体的なデフォルト値は別途確定する。
+操作判定時間は子機設定として保持する。
+
+| 設定項目 | デフォルト | 内容 |
+|---|---:|---|
+| `double_click_interval_ms` | 400 ms | 1回目のクリック後、2回目のクリックを待つ時間 |
+| `long_press_threshold_ms` | 1000 ms | 押下継続を長押しと判定する時間 |
+
+両設定値はUSB CDCの `get_config` / `set_config` で取得・変更可能とし、永続保存する。
+
+`CLICK` は、1回目のクリック後 `double_click_interval_ms` 内に2回目が成立しなかった時点で確定する。2回目が成立した場合は `DOUBLE_CLICK` とし、同一操作から `CLICK` と `DOUBLE_CLICK` を重複発生させない。
+
+`LONG_PRESS` は押下状態が `long_press_threshold_ms` 以上継続した場合に成立する。
 
 ### 2.2 子機CDC設定
+
+Action入力割当:
 
 | 項目 | 内容 |
 |---|---|
@@ -51,6 +64,15 @@ GPIO 5 / DOUBLE_CLICK / Action ID 11
 GPIO 5 / LONG_PRESS   / Action ID 12
 GPIO 8 / OFF_TO_ON    / Action ID 20
 GPIO 8 / ON_TO_OFF    / Action ID 21
+```
+
+操作判定設定例:
+
+```json
+{
+  "double_click_interval_ms": 400,
+  "long_press_threshold_ms": 1000
+}
 ```
 
 子機はAction名、対象家族、Web表示メッセージ、状態変更内容、通知設定、LINE / Slack等の送信先を保持・解釈しない。
@@ -132,6 +154,7 @@ Actionの対象家族と通知先家族は別概念とする。
 | GPIO監視 | ○ | × |
 | Input Event生成 | ○ | × |
 | CLICK / DOUBLE_CLICK / LONG_PRESS判定 | ○ | × |
+| 操作判定時間の設定・保持 | ○ | × |
 | GPIO+Input EventへのAction ID割当 | ○ | × |
 | Action IDの意味解釈 | × | ○ |
 | `target_type` / 対象家族 | × | ○ |
@@ -148,7 +171,7 @@ Actionの対象家族と通知先家族は別概念とする。
 [子機]
 GPIO
   ↓
-Input Event
+Input Event判定
   ├─ OFF_TO_ON
   ├─ ON_TO_OFF
   ├─ CLICK
