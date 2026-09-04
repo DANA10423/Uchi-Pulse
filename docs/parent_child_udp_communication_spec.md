@@ -47,11 +47,13 @@
 GPIO + Edge + Action ID
 ```
 
+`Edge` は `OFF_TO_ON` / `ON_TO_OFF` のいずれかとする。
+
 GPIOおよびEdgeは子機がAction IDを選択するための入力設定であり、Action IDの意味定義そのものではない。
 
 子機はAction IDの意味、対象家族、Web表示メッセージ、通知先を解釈しない。
 
-親機は受信したAction IDを親機DBのAction定義と照合し、状態変更・Web表示・通知処理を決定する。
+親機は受信したAction IDを親機DBのAction定義と照合し、状態変更・Web表示・通知判断を行う。
 
 ### 5.2 EVENT概念形式
 
@@ -64,7 +66,7 @@ GPIOおよびEdgeは子機がAction IDを選択するための入力設定であ
 }
 ```
 
-具体的なID型・追加共通フィールドは実装詳細で確定する。
+`event_id` はEVENTの重複排除・ACK対応に使用するEVENT識別情報とする。具体的なID生成方式は実装詳細で定義する。
 
 ### 5.3 EVENT処理
 
@@ -91,7 +93,9 @@ Action ID解釈
   ↓
 Web表示
   ↓
-通知設定に従い必要な場合のみ外部通知
+通知設定評価
+  ↓
+必要な場合のみ通知機能へ通知要求
 ```
 
 ---
@@ -100,7 +104,9 @@ Web表示
 
 EVENTに対するACKはできるだけ単純な形式とする。
 
-同一EVENTを再受信した場合、親機はイベント履歴を二重登録しないが、子機が再送を停止できるようACKは返す。
+ACKは対象EVENTの識別情報を返し、子機がどのEVENTに対するACKか判定できるようにする。
+
+同一EVENTを再受信した場合、親機はイベント履歴およびAction処理を二重実行しないが、子機が再送を停止できるようACKは返す。
 
 ---
 
@@ -108,9 +114,18 @@ EVENTに対するACKはできるだけ単純な形式とする。
 
 HELLO、HEARTBEAT、EVENT等の正常なUDPメッセージを受信した場合、親機は対象子機をONLINEとして扱う。
 
+親機起動直後の登録済み子機は、通信確認前は `INITIAL_WAIT`（未確認）として扱う。
+
+`INITIAL_WAIT` のままオフライン判定時間を超えた場合は `OFFLINE` へ遷移する。
+
 一度OFFLINEになった子機でも正常なメッセージを受信すればONLINEへ復帰する。
 
-親機起動直後の登録済み子機は、通信確認前は `INITIAL_WAIT`（未確認）として扱う。
+```text
+INITIAL_WAIT --正常受信--> ONLINE
+INITIAL_WAIT --オフライン判定時間超過--> OFFLINE
+ONLINE       --オフライン判定時間超過--> OFFLINE
+OFFLINE      --正常受信--> ONLINE
+```
 
 ---
 
