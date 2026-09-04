@@ -19,8 +19,10 @@
 - イベント履歴保存
 - Web表示情報提供
 - Action通知設定の評価
-- LINE / Slack等への通知
+- 通知機能への通知要求引き渡し
 - 親機自身のUSB CDC設定・保守
+
+LINE / Slack等の外部サービスへの実送信処理は通知機能として分離する。
 
 ---
 
@@ -42,7 +44,7 @@ Action ID
     ↓
 Action定義を参照
     ↓
-状態・表示・通知処理
+状態・表示・通知判断
 ```
 
 親機は、どのGPIO・どのエッジからActionが発生したかをAction定義の意味として保持しない。GPIO割当は子機設定である。
@@ -73,11 +75,11 @@ ActionにはAction種別、名称、必要に応じた対象家族、Web表示�
 
 ## 5. 通知管理
 
-スマートフォン通知はAction定義から分離する。
+スマートフォン通知設定はAction定義から分離する。
 
 通知設定では、Actionごとの通知有無と通知先家族を管理する。Action対象者と通知先は別概念である。
 
-家族ごとのLINE / Slack等の実送信先情報も別管理する。
+家族ごとのLINE / Slack等の実送信先設定も別管理する。
 
 ```text
 Action発生
@@ -88,7 +90,7 @@ Action発生
        ↓
      通知先家族
        ↓
-     家族の通知先設定
+     通知機能へ通知要求
        ↓
      LINE / Slack等
 ```
@@ -108,7 +110,17 @@ Action発生
 
 親機起動時はDBの有効デバイスを読み込み、通信状態を `INITIAL_WAIT` とする。入室可否はイベント履歴から最新値を復元する。
 
-HELLO / HEARTBEAT / EVENT等の正常受信でONLINEとし、設定された時間通信がなければOFFLINEとする。OFFLINE後も正常受信でONLINEへ復帰する。
+通信状態の基本遷移:
+
+```text
+INITIAL_WAIT --正常受信--> ONLINE
+INITIAL_WAIT --オフライン判定時間超過--> OFFLINE
+ONLINE       --正常受信--> ONLINE
+ONLINE       --オフライン判定時間超過--> OFFLINE
+OFFLINE      --正常受信--> ONLINE
+```
+
+正常受信とは通信仕様上有効なHELLO / HEARTBEAT / EVENT等を正常に解析・処理できた場合をいう。
 
 ---
 
@@ -123,7 +135,7 @@ SQLiteを使用する。
 - Action定義
 - Action通知設定
 - 通知先家族
-- 家族の外部通知先
+- 家族の外部通知先設定
 - EVENT履歴
 
 通信状態等の現在値はDBの専用状態として保存しない。
