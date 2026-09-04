@@ -1,338 +1,140 @@
-# 親機・子機間 通信仕様書
+# Uchi-Pulse 親機・子機 UDP通信仕様書
 
 ## 1. 目的
 
-本仕様書は、Uchi-Pulse における親機（Raspberry Pi Zero W / Zero 2 W）と子機（Raspberry Pi Pico W / Pico 2 W）間の通信仕様を定義する。
-
-家庭内Wi-Fi/LAN上で、複数子機から親機へのイベント通知、生存確認、および親機による通信状態判定を行う。
+子機（Pico W / Pico 2 W）と親機（Zero W / Zero 2 W）の通常運用時UDP通信を定義する。
 
 ---
 
-## 2. 基本仕様
+## 2. 基本方針
 
-| 項目 | 仕様 |
-|---|---|
-| ネットワーク | 家庭内Wi-Fi / LAN |
-| トランスポート | UDP |
-| データ形式 | JSON |
-| 主通信方向 | 子機 → 親機 |
-| 到達確認 | EVENTのみACKを使用 |
-| 複数子機 | 対応 |
-| 子機識別 | `device_id` |
-| メッセージ識別 | `message_id` |
-| EVENT重複判定 | `device_id + message_id` |
-| 子機登録情報 | 親機SQLiteのデバイスマスタに永続化 |
-| 通信状態 | 親機メモリ上で管理し、DBへ永続化しない |
+- JSONを使用する。
+- 親機・子機は家庭内LAN上でUDP通信する。
+- 子機はHELLO、HEARTBEAT、EVENTを送信する。
+- EVENTはACK対象とする。
+- ACK待ち時間はデフォルト60秒、設定変更可能とする。
+- 再送回数はデフォルト3回とする。
+- HEARTBEAT間隔はデフォルト3分、設定変更可能とする。
+- オフライン判定時間はデフォルト3分、設定変更可能とする。
 
 ---
 
-## 3. 子機管理
+## 3. HELLO
 
-### 3.1 親機起動時
+子機起動時等に親機へ存在を通知する。親機起動時は子機へHELLO送信を促すブロードキャストを行えるものとする。
 
-親機は起動時にSQLiteのデバイスマスタから登録済みかつ有効な子機を取得し、通信状態管理の対象とする。
-
-各子機の起動直後の状態は `INITIAL_WAIT`（未確認）とし、最終正常受信時刻は未設定とする。
-
-親機起動時に子機一覧を空の状態から開始する方式は採用しない。
-
-### 3.2 デバイスマスタと通信状態
-
-子機の登録情報と現在の通信状態は分離する。
-
-- デバイスマスタ: SQLiteへ永続化する。
-- 通信状態: 親機稼働中のメモリ上で管理する。
-
-Nodeから通信を受信したことだけを理由として、未登録Nodeを自動的にデバイスマスタへ登録することは本仕様では前提としない。
-
-### 3.3 子機識別
-
-子機は `device_id` によって識別する。
-
-IPアドレスは子機そのものの識別子として使用しない。
-
-### 3.4 親機起動時のブロードキャスト
-
-親機起動時にHELLO要求を全子機へブロードキャストする処理は必須としない。
-
-親機は登録済み子機を `INITIAL_WAIT` として管理し、子機から自発的に送信されるHELLO、HEARTBEAT、EVENT等の正常な通信を待つ。
+正常なHELLO受信は親機の通信状態をONLINEへ更新する根拠となる。
 
 ---
 
-## 4. 通信状態管理
+## 4. HEARTBEAT
 
-### 4.1 状態
+子機の生存確認に使用する。
 
-| 状態 | 意味 |
-|---|---|
-| `INITIAL_WAIT` | 登録済みだが、現在起動している親機がまだ正常な通信を確認していない |
-| `ONLINE` | 正常な通信を確認済みで、オフライン判定時間内に通信がある |
-| `OFFLINE` | 一度通信を確認した後、オフライン判定時間を超えて正常な通信がない |
+正常なHEARTBEAT受信は親機の通信状態をONLINEへ更新する根拠となる。
 
-### 4.2 ONLINE判定
+---
 
-親機が登録済み子機から通信仕様上有効なパケットを正常に受信した場合、その子機を `ONLINE` とする。
+## 5. EVENT
 
-対象には以下を含む。
+### 5.1 Action ID
 
-- `HELLO`
-- `HEARTBEAT`
-- `EVENT`
+子機のGPIO入力から発生したEVENTでは、子機CDC設定に従ってAction IDを送信する。
 
-正常なパケットを受信するたびに最終正常受信時刻を更新する。
-
-一度 `OFFLINE` となった子機も、正常なパケットを受信した時点で `ONLINE` へ復帰する。
-
-### 4.3 HEARTBEAT
-
-子機は一定間隔でHEARTBEATを送信する。
-
-初期値は以下とする。
+子機側の入力割当は次の3要素である。
 
 ```text
-heartbeat_interval_sec = 180
+GPIO + Edge + Action ID
 ```
 
-HEARTBEATにはACKを返さない。
+GPIOおよびEdgeは子機がAction IDを選択するための入力設定であり、Action IDの意味定義そのものではない。
 
-### 4.4 OFFLINE判定
+子機はAction IDの意味、対象家族、Web表示メッセージ、通知先を解釈しない。
 
-親機はONLINEの子機について、最後に正常なパケットを受信してから設定されたオフライン判定時間を超えた場合、その子機を `OFFLINE` とする。
+親機は受信したAction IDを親機DBのAction定義と照合し、状態変更・Web表示・通知処理を決定する。
 
-初期値は以下とする。
-
-```text
-offline_timeout_sec = 210
-```
-
-`OFFLINE` はデバイスマスタからの削除を意味しない。
-
-`INITIAL_WAIT` は親機起動後まだ一度も通信を確認していない状態であり、単純にOFFLINEと同一視しない。
-
-### 4.5 状態遷移
-
-```text
-親機起動
-   │
-   ▼
-INITIAL_WAIT
-   │
-   │ 正常な子機パケット受信
-   ▼
- ONLINE
-   │
-   │ 最終正常受信からoffline_timeout_sec経過
-   ▼
- OFFLINE
-   │
-   │ 正常な子機パケット受信
-   └────────────────────→ ONLINE
-```
-
----
-
-## 5. JSON共通フォーマット
-
-ACKを除く子機から親機へのメッセージは以下を基本とする。
+### 5.2 EVENT概念形式
 
 ```json
 {
-  "version": 1,
   "type": "EVENT",
-  "device_id": "CHILD-001",
-  "message_id": 12345,
-  "data": {}
+  "device_id": "node-01",
+  "event_id": "...",
+  "action_id": 1
 }
 ```
 
-| フィールド | 型 | 必須 | 内容 |
-|---|---|---|---|
-| `version` | integer | 必須 | 通信プロトコルバージョン。初期値1 |
-| `type` | string | 必須 | メッセージ種別 |
-| `device_id` | string | 必須 | 子機固有識別子 |
-| `message_id` | integer | 必須 | 子機が付与するメッセージ番号 |
-| `data` | object | 必須 | メッセージ固有データ |
+具体的なID型・追加共通フィールドは実装詳細で確定する。
 
-基本メッセージは `HELLO`、`HEARTBEAT`、`EVENT`、`ACK` とする。
-
----
-
-## 6. message_id
-
-`message_id` は子機ごとに管理する連番とする。
-
-EVENT再送時には新しい `message_id` を割り当てず、最初に送信したEVENTと同じ値を使用する。
-
-親機はEVENTについて以下の組み合わせで重複を判定する。
+### 5.3 EVENT処理
 
 ```text
-device_id + message_id
-```
+[子機]
+GPIOエッジ検出
+  ↓
+Action ID取得
+  ↓
+EVENT送信
+  ↓
+ACK待ち / 必要に応じ再送
 
-データベース設計上の `event_id` は、このEVENT識別情報を保存する項目として扱う。
+---------------- 責務境界 ----------------
+
+[親機]
+EVENT受信
+  ↓
+Action ID解釈
+  ↓
+履歴保存
+  ↓
+現在状態更新
+  ↓
+Web表示
+  ↓
+通知設定に従い必要な場合のみ外部通知
+```
 
 ---
 
-## 7. HELLO
+## 6. ACK
 
-HELLOは子機の起動時やWi-Fi再接続時などに、自身の存在を親機へ通知するために使用する。
+EVENTに対するACKはできるだけ単純な形式とする。
 
-HELLOはONLINE判定の必須条件ではない。EVENTまたはHEARTBEATを先に正常受信した場合も、登録済み子機の通信状態をONLINEとする。
-
-例:
-
-```json
-{
-  "version": 1,
-  "type": "HELLO",
-  "device_id": "CHILD-001",
-  "message_id": 1,
-  "data": {
-    "name": "リビング",
-    "firmware_version": "1.0.0"
-  }
-}
-```
-
-HELLOはACK対象外とする。
+同一EVENTを再受信した場合、親機はイベント履歴を二重登録しないが、子機が再送を停止できるようACKは返す。
 
 ---
 
-## 8. HEARTBEAT
+## 7. 通信状態
 
-HEARTBEATは、子機が正常に動作し親機と通信可能であることを通知する。
+HELLO、HEARTBEAT、EVENT等の正常なUDPメッセージを受信した場合、親機は対象子機をONLINEとして扱う。
 
-```json
-{
-  "version": 1,
-  "type": "HEARTBEAT",
-  "device_id": "CHILD-001",
-  "message_id": 152,
-  "data": {}
-}
-```
+一度OFFLINEになった子機でも正常なメッセージを受信すればONLINEへ復帰する。
 
-HEARTBEATはACK対象外とする。
-
-正常受信した場合、親機は対象の登録済み子機をONLINEとし、最終正常受信時刻を更新する。
+親機起動直後の登録済み子機は、通信確認前は `INITIAL_WAIT`（未確認）として扱う。
 
 ---
 
-## 9. EVENT
+## 8. Action定義との境界
 
-EVENTは、子機で発生したボタン操作、センサー検知、状態変化等を親機へ通知する。
+本UDP仕様はAction IDを転送するが、Actionの意味は定義しない。
 
-```json
-{
-  "version": 1,
-  "type": "EVENT",
-  "device_id": "CHILD-001",
-  "message_id": 153,
-  "data": {
-    "event_type": "BUTTON",
-    "channel": 1,
-    "value": 1
-  }
-}
-```
+Action定義は親機側で管理し、初期Actionとして以下を使用する。
 
-初期仕様の `event_type` は以下を想定する。
+- ご飯通知
+- ご飯通知クリア
+- 入室OK
+- 入室NG
+- 会議中
+- ポスト投函
+- ポスト投函解除
 
-| event_type | 用途 |
-|---|---|
-| `BUTTON` | イベントボタン等の操作 |
-| `SENSOR` | ポスト投函検知等のセンサーイベント |
-| `STATE` | 状態変化通知 |
-
-イベント固有の意味は物理GPIO番号ではなく論理 `channel` によって扱う。
-
-正常なEVENTを受信した場合、親機は通信状態をONLINEへ更新し、イベント履歴をSQLiteへ保存したうえでACKを返す。
+詳細は `docs/home_yuru_communication_design.md` および `docs/parent-database-design.md` を参照する。
 
 ---
 
-## 10. ACK
+## 9. 関連仕様
 
-ACKはEVENTのみを対象とする。HELLOおよびHEARTBEATにはACKを返さない。
-
-ACKは可能な限り単純なJSONとする。
-
-```json
-{
-  "type": "ACK",
-  "message_id": 153
-}
-```
-
-`message_id` には受信したEVENTの `message_id` を設定する。
-
-子機はACKの `message_id` が送信中EVENTと一致した場合、そのEVENTの送信を完了する。
-
----
-
-## 11. EVENT再送
-
-EVENT送信後のACK待ち時間の初期値は以下とする。
-
-```text
-ack_timeout_sec = 3
-```
-
-ACKを受信できなかった場合、同じEVENTを再送する。
-
-再送回数の初期値は以下とする。
-
-```text
-event_retry_count = 3
-```
-
-再送時も同じ `message_id` を使用する。
-
----
-
-## 12. EVENT重複処理
-
-ACKが失われた場合など、親機が処理済みのEVENTを子機が再送する可能性がある。
-
-親機は `device_id + message_id` によってEVENTの重複を判定する。
-
-同一EVENTを再受信した場合は以下とする。
-
-1. EVENT履歴を二重登録しない。
-2. EVENTに伴う本処理を重複実行しない。
-3. ACKは再度返信する。
-
-SQLiteでは `(device_id, event_id)` の一意制約により履歴の二重登録を防止する。
-
----
-
-## 13. 親機の受信処理概要
-
-```text
-UDP受信
-  │
-  ▼
-JSON解析・妥当性確認
-  │
-  ▼
-登録済みdevice_idの確認
-  │
-  ▼
-正常受信として通信状態をONLINEへ更新
-  │
-  ▼
-メッセージ種別判定
-  │
-  ├── HELLO ──────> 存在通知として処理
-  ├── HEARTBEAT ──> 生存通知として処理
-  └── EVENT ──────> 重複判定 → 履歴保存 → ACK
-```
-
-単にUDPパケットを受信しただけではONLINEとせず、通信仕様上有効なメッセージとして正常に解析できた場合に状態更新する。
-
----
-
-## 14. 関連文書
-
-- `docs/parent-overview-design.md`
+- `docs/cdc_communication_spec.md`
+- `docs/home_yuru_communication_design.md`
 - `docs/parent-database-design.md`
-- `docs/uchi-pulse-system-overview.md`
+- `docs/parent-overview-design.md`
