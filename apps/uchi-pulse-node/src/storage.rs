@@ -9,7 +9,7 @@ use uchi_pulse_common::codec::{CodecError, decode, encode};
 
 use crate::config::{ConfigValidationError, PersistedNodeConfig};
 
-pub const CONFIG_STORAGE_FORMAT_VERSION: u8 = 1;
+pub const CONFIG_STORAGE_FORMAT_VERSION: u8 = 2;
 pub const CONFIG_STORAGE_SIZE: usize = 4096;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

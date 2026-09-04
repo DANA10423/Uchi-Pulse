@@ -15,6 +15,7 @@ fn main() {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is provided by Cargo"));
     fs::copy(memory_file, out_dir.join("memory.x")).expect("copy memory.x");
     println!("cargo:rustc-link-search={}", out_dir.display());
+    println!("cargo:rustc-link-arg-bins=-Tlink.x");
     println!("cargo:rustc-link-arg-bins=-Tdefmt.x");
     println!("cargo:rerun-if-changed={memory_file}");
 }

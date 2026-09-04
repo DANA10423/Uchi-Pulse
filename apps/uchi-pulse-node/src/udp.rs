@@ -5,6 +5,7 @@
 //! interpret the meaning of an Action ID.
 
 use core::fmt::Write;
+use serde::Deserialize;
 
 use uchi_pulse_common::codec::{decode, encode};
 use uchi_pulse_common::types::text;
@@ -18,6 +19,20 @@ pub enum ProtocolError {
     EventIdTooLong,
     SequenceExhausted,
     BufferTooSmall,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HelloRequest {
+    #[serde(rename = "type")]
+    message_type: heapless::String<16>,
+}
+
+/// Returns whether a datagram is the parent-only discovery request.
+pub fn is_hello_request(payload: &[u8]) -> bool {
+    decode::<HelloRequest>(payload)
+        .map(|request| request.message_type.as_str() == "HELLO_REQUEST")
+        .unwrap_or(false)
 }
 
 /// One initial transmission followed by the configured number of retries.
@@ -247,6 +262,16 @@ mod tests {
         assert!(decode::<UdpMessage>(formal).is_ok());
         let legacy = br#"{"type":"ACK","message_id":1}"#;
         assert!(decode::<UdpMessage>(legacy).is_err());
+    }
+
+    #[test]
+    fn recognizes_only_parent_hello_request() {
+        assert!(is_hello_request(br#"{"type":"HELLO_REQUEST"}"#));
+        assert!(!is_hello_request(
+            br#"{"type":"HELLO_REQUEST","device_id":"node-01"}"#
+        ));
+        assert!(!is_hello_request(br#"{"type":"HELLO"}"#));
+        assert!(!is_hello_request(br#"not-json"#));
     }
 
     #[test]

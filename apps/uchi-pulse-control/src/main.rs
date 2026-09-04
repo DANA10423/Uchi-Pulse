@@ -538,6 +538,14 @@ fn install_japanese_font(context: &egui::Context) -> Option<String> {
 fn default_config_text() -> String {
     serde_json::to_string_pretty(&json!({
         "device_id": "node-01",
+        "wifi": {
+            "ssid": "change-me",
+            "password": "change-me"
+        },
+        "network": {
+            "mode": "DHCP",
+            "static_ipv4": null
+        },
         "gpio_inputs": [],
         "input_mappings": [],
         "double_click_interval_ms": 400,

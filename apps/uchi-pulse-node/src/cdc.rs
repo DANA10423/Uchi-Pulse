@@ -11,7 +11,7 @@ use uchi_pulse_common::types::{RequestId, text};
 
 use crate::config::{
     ConfigValidationError, GpioInputConfig, InputMapping, MAX_PERSISTED_GPIO_INPUTS,
-    MAX_PERSISTED_INPUT_MAPPINGS, PersistedNodeConfig,
+    MAX_PERSISTED_INPUT_MAPPINGS, NetworkConfig, PersistedNodeConfig, WifiConfig,
 };
 use crate::storage::{ConfigManager, ConfigManagerError, ConfigStorage};
 
@@ -89,6 +89,8 @@ impl Default for CdcLineParser {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NodeCdcParams {
     pub device_id: Option<uchi_pulse_common::DeviceId>,
+    pub wifi: Option<WifiConfig>,
+    pub network: Option<NetworkConfig>,
     pub gpio_inputs: Option<Vec<GpioInputConfig, MAX_PERSISTED_GPIO_INPUTS>>,
     pub input_mappings: Option<Vec<InputMapping, MAX_PERSISTED_INPUT_MAPPINGS>>,
     pub double_click_interval_ms: Option<u32>,
@@ -102,6 +104,8 @@ impl NodeCdcParams {
     fn into_config(self) -> Result<PersistedNodeConfig, CdcParameterError> {
         let config = PersistedNodeConfig {
             device_id: self.device_id.ok_or(CdcParameterError::MissingField)?,
+            wifi: self.wifi.ok_or(CdcParameterError::MissingField)?,
+            network: self.network.ok_or(CdcParameterError::MissingField)?,
             gpio_inputs: self.gpio_inputs.ok_or(CdcParameterError::MissingField)?,
             input_mappings: self.input_mappings.ok_or(CdcParameterError::MissingField)?,
             double_click_interval_ms: self
@@ -129,6 +133,8 @@ impl From<&PersistedNodeConfig> for NodeCdcParams {
     fn from(config: &PersistedNodeConfig) -> Self {
         Self {
             device_id: Some(config.device_id.clone()),
+            wifi: Some(config.wifi.clone()),
+            network: Some(config.network.clone()),
             gpio_inputs: Some(config.gpio_inputs.clone()),
             input_mappings: Some(config.input_mappings.clone()),
             double_click_interval_ms: Some(config.double_click_interval_ms),
@@ -370,7 +376,10 @@ fn encode_response<T: Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{GpioInputConfig, InputMapping, PersistedNodeConfig};
+    use crate::config::{
+        GpioInputConfig, InputMapping, NetworkConfig, NetworkMode, PersistedNodeConfig,
+        StaticIpv4Config,
+    };
     use crate::storage::{CONFIG_STORAGE_SIZE, MemoryConfigStorage};
     use uchi_pulse_common::cdc::{CdcErrorCode, CdcResponse};
     use uchi_pulse_common::codec::decode_line;
@@ -397,6 +406,14 @@ mod tests {
             .unwrap();
         NodeCdcParams {
             device_id: Some(text("node-configured").unwrap()),
+            wifi: Some(WifiConfig {
+                ssid: text("MyHomeWiFi").unwrap(),
+                password: text("secret-password").unwrap(),
+            }),
+            network: Some(NetworkConfig {
+                mode: crate::config::NetworkMode::Dhcp,
+                static_ipv4: None,
+            }),
             gpio_inputs: Some(PersistedNodeConfig::defaults().gpio_inputs),
             input_mappings: Some(mappings),
             double_click_interval_ms: Some(400),
@@ -457,6 +474,70 @@ mod tests {
         assert_eq!(response.status, CdcStatus::Ok);
         assert_eq!(handler.config().device_id.as_str(), "node-configured");
         assert_eq!(handler.config().input_mappings[0].action_id, 77);
+    }
+
+    #[test]
+    fn set_config_persists_wifi_and_static_network_settings() {
+        let mut handler = handler();
+        let mut params = full_params(78);
+        params.wifi = Some(WifiConfig {
+            ssid: text("configured-wifi").unwrap(),
+            password: text("configured-password").unwrap(),
+        });
+        params.network = Some(NetworkConfig {
+            mode: NetworkMode::Static,
+            static_ipv4: Some(StaticIpv4Config {
+                ip_address: text("192.168.1.50").unwrap(),
+                prefix_length: 24,
+                gateway: text("192.168.1.1").unwrap(),
+                dns: text("1.1.1.1").unwrap(),
+            }),
+        });
+
+        let (_, response) = send_empty(&mut handler, request("set_config", params));
+        assert_eq!(response.status, CdcStatus::Ok);
+        assert_eq!(handler.config().wifi.ssid.as_str(), "configured-wifi");
+        assert_eq!(
+            handler.config().wifi.password.as_str(),
+            "configured-password"
+        );
+        assert_eq!(handler.config().network.mode, NetworkMode::Static);
+        assert_eq!(
+            handler
+                .config()
+                .network
+                .static_ipv4
+                .as_ref()
+                .unwrap()
+                .ip_address
+                .as_str(),
+            "192.168.1.50"
+        );
+
+        let (_, response) = send_config(
+            &mut handler,
+            request("get_config", NodeCdcParams::default()),
+        );
+        assert_eq!(response.status, CdcStatus::Ok);
+        assert_eq!(response.data.unwrap(), handler.config().clone());
+    }
+
+    #[test]
+    fn set_config_rejects_invalid_static_network_settings() {
+        let mut handler = handler();
+        let mut params = full_params(79);
+        params.network = Some(NetworkConfig {
+            mode: NetworkMode::Static,
+            static_ipv4: Some(StaticIpv4Config {
+                ip_address: text("192.168.1.50").unwrap(),
+                prefix_length: 24,
+                gateway: text("not-an-ip").unwrap(),
+                dns: text("1.1.1.1").unwrap(),
+            }),
+        });
+        let (_, response) = send_empty(&mut handler, request("set_config", params));
+        assert_eq!(response.error.unwrap().code, CdcErrorCode::InvalidConfig);
+        assert_eq!(handler.config(), &PersistedNodeConfig::defaults());
     }
 
     #[test]

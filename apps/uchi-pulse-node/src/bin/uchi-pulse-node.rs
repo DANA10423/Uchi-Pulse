@@ -14,7 +14,7 @@ mod firmware {
     use defmt_rtt as _;
     use embassy_executor::Spawner;
     use embassy_net::udp::{PacketMetadata, UdpSocket};
-    use embassy_net::{IpEndpoint, Ipv4Address, StackResources};
+    use embassy_net::{IpEndpoint, Ipv4Address, Ipv4Cidr, StackResources, StaticConfigV4};
     use embassy_rp::clocks::RoscRng;
     use embassy_rp::flash::{Blocking, Flash};
     use embassy_rp::gpio::{Input, Output, Pull};
@@ -23,7 +23,8 @@ mod firmware {
     use embassy_rp::{bind_interrupts, dma};
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
     use embassy_sync::channel::Channel;
-    use embassy_time::{Duration, Instant, Timer, with_deadline};
+    use embassy_sync::mutex::Mutex;
+    use embassy_time::{Duration, Instant, Timer, with_deadline, with_timeout};
     use embassy_usb::class::cdc_acm::{CdcAcmClass, State as CdcState};
     use embassy_usb::{Builder, UsbDevice};
     use panic_probe as _;
@@ -32,10 +33,10 @@ mod firmware {
     use uchi_pulse_node::cdc::{
         CdcAction, CdcLineParser, MAX_CDC_LINE_SIZE, NodeCdcHandler as CdcCommandHandler,
     };
-    use uchi_pulse_node::config::{DEFAULT_CONFIG, PersistedNodeConfig};
+    use uchi_pulse_node::config::{DEFAULT_CONFIG, NetworkMode, PersistedNodeConfig, parse_ipv4};
     use uchi_pulse_node::input::{InputController, TriggeredAction};
     use uchi_pulse_node::storage::{CONFIG_STORAGE_SIZE, ConfigManager, ConfigStorage};
-    use uchi_pulse_node::udp::{NodeUdpProtocol, PendingEvent, RetryPolicy};
+    use uchi_pulse_node::udp::{NodeUdpProtocol, PendingEvent, RetryPolicy, is_hello_request};
 
     bind_interrupts!(struct Irqs {
         PIO0_IRQ_0 => InterruptHandler<PIO0>;
@@ -50,6 +51,7 @@ mod firmware {
     const CONFIG_RECORD_HEADER_SIZE: usize = 8;
     type NodeFlash = Flash<'static, FLASH, Blocking, FLASH_SIZE>;
     type FirmwareCdcHandler = CdcCommandHandler<FlashConfigStorage>;
+    type HubEndpoint = Mutex<CriticalSectionRawMutex, Option<IpEndpoint>>;
 
     struct FlashConfigStorage {
         flash: NodeFlash,
@@ -138,12 +140,17 @@ mod firmware {
     static EVENT_RX_BUFFER: StaticCell<[u8; 512]> = StaticCell::new();
     static EVENT_TX_METADATA: StaticCell<[PacketMetadata; 4]> = StaticCell::new();
     static EVENT_TX_BUFFER: StaticCell<[u8; 512]> = StaticCell::new();
+    static CONTROL_RX_METADATA: StaticCell<[PacketMetadata; 4]> = StaticCell::new();
+    static CONTROL_RX_BUFFER: StaticCell<[u8; 512]> = StaticCell::new();
+    static CONTROL_TX_METADATA: StaticCell<[PacketMetadata; 4]> = StaticCell::new();
+    static CONTROL_TX_BUFFER: StaticCell<[u8; 512]> = StaticCell::new();
     static RUNTIME_CONFIG: StaticCell<PersistedNodeConfig> = StaticCell::new();
     static USB_CONFIG_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
     static USB_BOS_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
     static USB_MSOS_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
     static USB_CONTROL_BUFFER: StaticCell<[u8; 64]> = StaticCell::new();
     static CDC_STATE: StaticCell<CdcState<'static>> = StaticCell::new();
+    static HUB_ENDPOINT: StaticCell<HubEndpoint> = StaticCell::new();
 
     #[embassy_executor::task]
     async fn cyw43_task(
@@ -202,7 +209,7 @@ mod firmware {
     #[embassy_executor::task]
     async fn event_sender_task(
         mut socket: UdpSocket<'static>,
-        hub: IpEndpoint,
+        hub_endpoint: &'static HubEndpoint,
         boot_id: u64,
         config: &'static PersistedNodeConfig,
     ) -> ! {
@@ -231,6 +238,10 @@ mod firmware {
             let mut delivered = false;
             let mut retry_policy = RetryPolicy::new(config.event_retry_count);
             while let Some(attempt) = retry_policy.next_attempt() {
+                let Some(hub) = *hub_endpoint.lock().await else {
+                    warn!("EVENT dropped because parent has not been discovered");
+                    break;
+                };
                 if socket.send_to(&tx[..used], hub).await.is_err() {
                     warn!("EVENT send failed");
                     continue;
@@ -245,6 +256,84 @@ mod firmware {
             }
             if !delivered {
                 warn!("EVENT delivery failed after retries");
+            }
+        }
+    }
+
+    #[embassy_executor::task]
+    async fn discovery_and_heartbeat_task(
+        socket: UdpSocket<'static>,
+        hub_endpoint: &'static HubEndpoint,
+        boot_id: u64,
+        config: &'static PersistedNodeConfig,
+    ) -> ! {
+        let protocol = NodeUdpProtocol::new(config.device_id.as_str(), boot_id)
+            .expect("invalid device ID configuration");
+        let mut rx = [0; 128];
+        let mut tx = [0; 256];
+        let mut last_heartbeat = Instant::now();
+
+        loop {
+            if let Ok(Ok((length, source))) =
+                with_timeout(Duration::from_secs(1), socket.recv_from(&mut rx)).await
+                && is_hello_request(&rx[..length])
+            {
+                *hub_endpoint.lock().await = Some(source.endpoint);
+                let hello = protocol.hello();
+                if let Ok(hello_length) = protocol.encode_message(&hello, &mut tx) {
+                    let _ = socket.send_to(&tx[..hello_length], source.endpoint).await;
+                }
+            }
+
+            let now = Instant::now();
+            if now.saturating_duration_since(last_heartbeat)
+                >= Duration::from_secs(config.heartbeat_interval_sec.into())
+            {
+                if let Some(hub) = *hub_endpoint.lock().await {
+                    let heartbeat = protocol.heartbeat();
+                    if let Ok(heartbeat_length) = protocol.encode_message(&heartbeat, &mut tx) {
+                        let _ = socket.send_to(&tx[..heartbeat_length], hub).await;
+                    }
+                }
+                last_heartbeat = now;
+            }
+        }
+    }
+
+    fn network_config(config: &PersistedNodeConfig) -> embassy_net::Config {
+        match config.network.mode {
+            NetworkMode::Dhcp => embassy_net::Config::dhcpv4(Default::default()),
+            NetworkMode::Static => {
+                let static_ipv4 = config
+                    .network
+                    .static_ipv4
+                    .as_ref()
+                    .expect("validated static network configuration is missing");
+                let ip_address = parse_ipv4(static_ipv4.ip_address.as_str())
+                    .expect("validated static IP address is invalid");
+                let gateway = parse_ipv4(static_ipv4.gateway.as_str())
+                    .expect("validated static gateway is invalid");
+                let dns =
+                    parse_ipv4(static_ipv4.dns.as_str()).expect("validated static DNS is invalid");
+                let mut dns_servers = heapless::Vec::new();
+                dns_servers
+                    .push(Ipv4Address::new(dns[0], dns[1], dns[2], dns[3]))
+                    .unwrap();
+                embassy_net::Config::ipv4_static(StaticConfigV4 {
+                    address: Ipv4Cidr::new(
+                        Ipv4Address::new(
+                            ip_address[0],
+                            ip_address[1],
+                            ip_address[2],
+                            ip_address[3],
+                        ),
+                        static_ipv4.prefix_length,
+                    ),
+                    gateway: Some(Ipv4Address::new(
+                        gateway[0], gateway[1], gateway[2], gateway[3],
+                    )),
+                    dns_servers,
+                })
             }
         }
     }
@@ -401,7 +490,7 @@ mod firmware {
         control.init(clm).await;
 
         static STACK: StaticCell<StackResources<3>> = StaticCell::new();
-        let config = embassy_net::Config::dhcpv4(Default::default());
+        let config = network_config(runtime_config);
         let (stack, runner) = embassy_net::new(
             net_device,
             config,
@@ -412,8 +501,8 @@ mod firmware {
 
         while let Err(err) = control
             .join(
-                DEFAULT_CONFIG.wifi_ssid,
-                JoinOptions::new(DEFAULT_CONFIG.wifi_password.as_bytes()),
+                runtime_config.wifi.ssid.as_str(),
+                JoinOptions::new(runtime_config.wifi.password.as_bytes()),
             )
             .await
         {
@@ -533,28 +622,15 @@ mod firmware {
         };
         spawner.spawn(input_task(inputs, runtime_config).unwrap());
 
-        let mut rx_buffer = [0; 512];
-        let mut tx_buffer = [0; 512];
-        let mut rx_metadata = [PacketMetadata::EMPTY; 4];
-        let mut tx_metadata = [PacketMetadata::EMPTY; 4];
-        let mut socket = UdpSocket::new(
+        let mut control_socket = UdpSocket::new(
             stack,
-            &mut rx_metadata,
-            &mut rx_buffer,
-            &mut tx_metadata,
-            &mut tx_buffer,
+            CONTROL_RX_METADATA.init([PacketMetadata::EMPTY; 4]),
+            CONTROL_RX_BUFFER.init([0; 512]),
+            CONTROL_TX_METADATA.init([PacketMetadata::EMPTY; 4]),
+            CONTROL_TX_BUFFER.init([0; 512]),
         );
-        socket.bind(DEFAULT_CONFIG.local_port).unwrap();
-        let hub = IpEndpoint::new(
-            Ipv4Address::new(
-                DEFAULT_CONFIG.hub_ipv4[0],
-                DEFAULT_CONFIG.hub_ipv4[1],
-                DEFAULT_CONFIG.hub_ipv4[2],
-                DEFAULT_CONFIG.hub_ipv4[3],
-            )
-            .into(),
-            DEFAULT_CONFIG.hub_port,
-        );
+        control_socket.bind(DEFAULT_CONFIG.local_port).unwrap();
+        let hub_endpoint = HUB_ENDPOINT.init(Mutex::new(None));
 
         let event_socket = UdpSocket::new(
             stack,
@@ -565,24 +641,15 @@ mod firmware {
         );
         let mut event_socket = event_socket;
         event_socket.bind(0).unwrap();
-        spawner.spawn(event_sender_task(event_socket, hub, boot_id, runtime_config).unwrap());
-
-        let protocol = NodeUdpProtocol::new(runtime_config.device_id.as_str(), boot_id)
-            .expect("invalid device ID configuration");
-        let mut tx = [0; 512];
-        let hello = protocol.hello();
-        let hello_len = protocol
-            .encode_message(&hello, &mut tx)
-            .expect("HELLO JSON buffer too small");
-        let _ = socket.send_to(&tx[..hello_len], hub).await;
+        spawner
+            .spawn(event_sender_task(event_socket, hub_endpoint, boot_id, runtime_config).unwrap());
+        spawner.spawn(
+            discovery_and_heartbeat_task(control_socket, hub_endpoint, boot_id, runtime_config)
+                .unwrap(),
+        );
 
         loop {
-            Timer::after_secs(runtime_config.heartbeat_interval_sec.into()).await;
-            let heartbeat = protocol.heartbeat();
-            let heartbeat_len = protocol
-                .encode_message(&heartbeat, &mut tx)
-                .expect("HEARTBEAT JSON buffer too small");
-            let _ = socket.send_to(&tx[..heartbeat_len], hub).await;
+            Timer::after_secs(3600).await;
         }
     }
 }

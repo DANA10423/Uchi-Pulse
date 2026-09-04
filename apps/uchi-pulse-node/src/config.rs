@@ -1,11 +1,8 @@
 //! Device configuration.
-//!
-//! The first firmware version keeps the configuration in a compile-time value.
-//! USB CDC can replace this source later without changing the GPIO/event
-//! processing layer.
 
-use heapless::Vec;
+use heapless::{String, Vec};
 use serde::{Deserialize, Serialize};
+use uchi_pulse_common::types::text;
 use uchi_pulse_common::{
     ActionId, DEFAULT_ACK_TIMEOUT_MS, DEFAULT_EVENT_RETRY_COUNT, DEFAULT_HEARTBEAT_INTERVAL_SEC,
     DeviceId, InputEvent,
@@ -19,6 +16,14 @@ pub const SUPPORTED_GPIO_PINS: &[u8] = &[
 ];
 pub const MAX_PERSISTED_GPIO_INPUTS: usize = 10;
 pub const MAX_PERSISTED_INPUT_MAPPINGS: usize = 32;
+pub const WIFI_SSID_CAPACITY: usize = 32;
+pub const WIFI_PASSWORD_CAPACITY: usize = 64;
+pub const IPV4_TEXT_CAPACITY: usize = 15;
+pub const UDP_PORT: u16 = 5000;
+
+pub type WifiSsid = String<WIFI_SSID_CAPACITY>;
+pub type WifiPassword = String<WIFI_PASSWORD_CAPACITY>;
+pub type Ipv4Text = String<IPV4_TEXT_CAPACITY>;
 
 /// Physical properties of one GPIO input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -39,6 +44,34 @@ pub struct InputMapping {
     pub enabled: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WifiConfig {
+    pub ssid: WifiSsid,
+    pub password: WifiPassword,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum NetworkMode {
+    #[serde(rename = "DHCP")]
+    Dhcp,
+    #[serde(rename = "STATIC")]
+    Static,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct StaticIpv4Config {
+    pub ip_address: Ipv4Text,
+    pub prefix_length: u8,
+    pub gateway: Ipv4Text,
+    pub dns: Ipv4Text,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NetworkConfig {
+    pub mode: NetworkMode,
+    pub static_ipv4: Option<StaticIpv4Config>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OutputBinding {
     pub output: u8,
@@ -53,8 +86,6 @@ pub struct NodeConfig {
     pub firmware_version: &'static str,
     pub wifi_ssid: &'static str,
     pub wifi_password: &'static str,
-    pub hub_ipv4: [u8; 4],
-    pub hub_port: u16,
     pub local_port: u16,
     pub ack_timeout_ms: u32,
     pub event_retry_count: u8,
@@ -66,13 +97,12 @@ pub struct NodeConfig {
     pub outputs: &'static [OutputBinding],
 }
 
-/// The configuration which is safe to expose through CDC and store in flash.
-/// Runtime-only handles, Wi-Fi credentials, and hardware objects are kept out
-/// of this model. The network endpoint remains compile-time for this phase
-/// because it is not defined by the CDC specification.
+/// The configuration exposed through CDC and persisted in flash.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PersistedNodeConfig {
     pub device_id: DeviceId,
+    pub wifi: WifiConfig,
+    pub network: NetworkConfig,
     pub gpio_inputs: Vec<GpioInputConfig, MAX_PERSISTED_GPIO_INPUTS>,
     pub input_mappings: Vec<InputMapping, MAX_PERSISTED_INPUT_MAPPINGS>,
     pub double_click_interval_ms: u32,
@@ -94,6 +124,11 @@ pub enum ConfigValidationError {
     ZeroLongPressThreshold,
     ZeroAckTimeout,
     ZeroHeartbeatInterval,
+    EmptyWifiSsid,
+    InvalidWifiCredential,
+    MissingStaticIpv4,
+    InvalidPrefixLength(u8),
+    InvalidIpv4,
 }
 
 impl PersistedNodeConfig {
@@ -104,6 +139,14 @@ impl PersistedNodeConfig {
         }
         Self {
             device_id: uchi_pulse_common::types::text(DEFAULT_CONFIG.device_id).unwrap(),
+            wifi: WifiConfig {
+                ssid: text(DEFAULT_CONFIG.wifi_ssid).unwrap(),
+                password: text(DEFAULT_CONFIG.wifi_password).unwrap(),
+            },
+            network: NetworkConfig {
+                mode: NetworkMode::Dhcp,
+                static_ipv4: None,
+            },
             gpio_inputs,
             input_mappings: Vec::new(),
             double_click_interval_ms: DEFAULT_CONFIG.double_click_interval_ms,
@@ -134,6 +177,16 @@ impl PersistedNodeConfig {
         }
         let result = Self {
             device_id,
+            wifi: WifiConfig {
+                ssid: text(config.wifi_ssid)
+                    .map_err(|_| ConfigValidationError::InvalidWifiCredential)?,
+                password: text(config.wifi_password)
+                    .map_err(|_| ConfigValidationError::InvalidWifiCredential)?,
+            },
+            network: NetworkConfig {
+                mode: NetworkMode::Dhcp,
+                static_ipv4: None,
+            },
             gpio_inputs,
             input_mappings,
             double_click_interval_ms: config.double_click_interval_ms,
@@ -149,6 +202,30 @@ impl PersistedNodeConfig {
     pub fn validate(&self) -> Result<(), ConfigValidationError> {
         if self.device_id.is_empty() {
             return Err(ConfigValidationError::EmptyDeviceId);
+        }
+        if self.wifi.ssid.is_empty() {
+            return Err(ConfigValidationError::EmptyWifiSsid);
+        }
+        match self.network.mode {
+            NetworkMode::Dhcp => {}
+            NetworkMode::Static => {
+                let static_ipv4 = self
+                    .network
+                    .static_ipv4
+                    .as_ref()
+                    .ok_or(ConfigValidationError::MissingStaticIpv4)?;
+                if static_ipv4.prefix_length > 32 {
+                    return Err(ConfigValidationError::InvalidPrefixLength(
+                        static_ipv4.prefix_length,
+                    ));
+                }
+                if parse_ipv4(static_ipv4.ip_address.as_str()).is_none()
+                    || parse_ipv4(static_ipv4.gateway.as_str()).is_none()
+                    || parse_ipv4(static_ipv4.dns.as_str()).is_none()
+                {
+                    return Err(ConfigValidationError::InvalidIpv4);
+                }
+            }
         }
         for input in &self.gpio_inputs {
             if !SUPPORTED_GPIO_PINS.contains(&input.gpio) {
@@ -271,9 +348,7 @@ pub const DEFAULT_CONFIG: NodeConfig = NodeConfig {
     firmware_version: env!("CARGO_PKG_VERSION"),
     wifi_ssid: "change-me",
     wifi_password: "change-me",
-    hub_ipv4: [192, 168, 1, 2],
-    hub_port: 5000,
-    local_port: 5001,
+    local_port: UDP_PORT,
     ack_timeout_ms: DEFAULT_ACK_TIMEOUT_MS,
     event_retry_count: DEFAULT_EVENT_RETRY_COUNT,
     heartbeat_interval_sec: DEFAULT_HEARTBEAT_INTERVAL_SEC,
@@ -283,6 +358,19 @@ pub const DEFAULT_CONFIG: NodeConfig = NodeConfig {
     input_mappings: DEFAULT_INPUT_MAPPINGS,
     outputs: DEFAULT_OUTPUTS,
 };
+
+pub fn parse_ipv4(value: &str) -> Option<[u8; 4]> {
+    let mut octets = [0; 4];
+    let mut count = 0;
+    for part in value.split('.') {
+        if count == 4 || part.is_empty() {
+            return None;
+        }
+        octets[count] = part.parse().ok()?;
+        count += 1;
+    }
+    (count == 4).then_some(octets)
+}
 
 #[cfg(test)]
 mod tests {
@@ -359,6 +447,50 @@ mod tests {
         assert_eq!(
             config.validate(),
             Err(ConfigValidationError::UnsupportedGpio(23))
+        );
+    }
+
+    #[test]
+    fn defaults_use_dhcp_and_persist_wifi_credentials() {
+        let config = PersistedNodeConfig::defaults();
+        assert_eq!(config.wifi.ssid.as_str(), "change-me");
+        assert_eq!(config.wifi.password.as_str(), "change-me");
+        assert_eq!(config.network.mode, NetworkMode::Dhcp);
+        assert!(config.network.static_ipv4.is_none());
+    }
+
+    #[test]
+    fn static_network_requires_valid_ipv4_values() {
+        let mut config = PersistedNodeConfig::defaults();
+        config.network = NetworkConfig {
+            mode: NetworkMode::Static,
+            static_ipv4: Some(StaticIpv4Config {
+                ip_address: text("192.168.1.50").unwrap(),
+                prefix_length: 24,
+                gateway: text("192.168.1.1").unwrap(),
+                dns: text("192.168.1.1").unwrap(),
+            }),
+        };
+        assert!(config.validate().is_ok());
+
+        config.network.static_ipv4.as_mut().unwrap().prefix_length = 33;
+        assert_eq!(
+            config.validate(),
+            Err(ConfigValidationError::InvalidPrefixLength(33))
+        );
+
+        config.network.static_ipv4.as_mut().unwrap().prefix_length = 24;
+        config.network.static_ipv4.as_mut().unwrap().dns = text("192.168.1").unwrap();
+        assert_eq!(config.validate(), Err(ConfigValidationError::InvalidIpv4));
+    }
+
+    #[test]
+    fn static_network_requires_static_ipv4_block() {
+        let mut config = PersistedNodeConfig::defaults();
+        config.network.mode = NetworkMode::Static;
+        assert_eq!(
+            config.validate(),
+            Err(ConfigValidationError::MissingStaticIpv4)
         );
     }
 }

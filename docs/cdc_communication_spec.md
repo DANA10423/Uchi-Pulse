@@ -81,6 +81,14 @@ Uchi-PulseにおけるUSB CDC通信の共通仕様と、親機・子機それぞ
 ```json
 {
   "device_id": "node-01",
+  "wifi": {
+    "ssid": "MyHomeWiFi",
+    "password": "********"
+  },
+  "network": {
+    "mode": "DHCP",
+    "static_ipv4": null
+  },
   "gpio_inputs": [
     { "gpio": 0, "active_high": false, "debounce_ms": 30 },
     { "gpio": 5, "active_high": false, "debounce_ms": 30 },
@@ -103,10 +111,13 @@ Uchi-PulseにおけるUSB CDC通信の共通仕様と、親機・子機それぞ
 ```
 
 `set_config.params` は上記設定オブジェクトを直接指定する。`get_config` の
-`data` は同じ設定オブジェクトを返す。`gpio_inputs` と
+`data` は同じ設定オブジェクトを返す。Wi-Fi SSID・パスワードとIP設定も子機設定に含まれ、
+Flashへ永続保存される。`gpio_inputs` と
 `input_mappings` の各要素には、子機が対応するGPIO、Input Event、Action ID、
 `enabled` を指定する。`set_config` は全設定項目を必須とし、保存後の次回起動時に
-適用する。
+適用する。`network.mode` は `DHCP` または `STATIC` とし、既定値は `DHCP` とする。
+`STATIC` の場合は `static_ipv4` を必須とし、`ip_address`、`prefix_length`（0..32）、
+`gateway`、`dns` をIPv4文字列で指定する。`DHCP` の場合は `static_ipv4` を `null` とする。
 
 - `double_click_interval_ms`: デフォルト400ms
 - `long_press_threshold_ms`: デフォルト1000ms
@@ -115,6 +126,7 @@ Uchi-PulseにおけるUSB CDC通信の共通仕様と、親機・子機それぞ
 - `event_retry_count`: デフォルト3回
 - `heartbeat_interval_sec`: デフォルト180秒
 - 各設定は取得・変更・永続保存可能とする。
+- Wi-Fi SSIDは空文字および32バイト超を拒否し、パスワードは64バイト超を拒否する。
 - `CLICK` と `DOUBLE_CLICK` は同一操作から重複発生させない。
 
 子機はAction名、対象家族、状態変更、Web表示、通知設定、通知先を保持・解釈しない。
