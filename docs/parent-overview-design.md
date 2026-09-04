@@ -61,15 +61,21 @@ Input Eventの検出・判定は子機側で完了する。親機はGPIO番号�
 
 Action定義は親機DBで管理する。
 
-基本Actionパターン:
+基本Actionパターンは11種類とする。
 
 - ご飯通知
 - ご飯通知クリア
+- おやつ通知
+- おやつ通知クリア
+- HELP通知
+- HELP通知クリア
 - 入室OK
 - 入室NG
 - 会議中
 - ポスト投函
 - ポスト投函解除
+
+ご飯通知、おやつ通知、HELP通知はそれぞれ独立した `ON` / `OFF` 状態として扱う。
 
 Actionには、Action ID、名称、`target_type`、`target_family_id`、Web表示メッセージ、状態変更内容を定義する。
 
@@ -100,8 +106,11 @@ LINE / Slack等の外部サービスへの実送信処理は通知機能とし�
 - `last_seen_at`
 - 通信状態: `INITIAL_WAIT` / `ONLINE` / `OFFLINE`
 - 入室可否: `UNSET` / `OK` / `NG` / `MEETING`
+- ご飯通知: `ON` / `OFF`
+- おやつ通知: `ON` / `OFF`
+- HELP通知: `ON` / `OFF`
 
-親機起動時はDBの有効デバイスを読み込み、通信状態を `INITIAL_WAIT` とする。入室可否はイベント履歴から最新値を復元する。
+親機起動時はDBの有効デバイスを読み込み、通信状態を `INITIAL_WAIT` とする。復元対象状態はイベント履歴から最新値を復元する。
 
 ```text
 INITIAL_WAIT --正常受信--> ONLINE
