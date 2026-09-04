@@ -28,8 +28,8 @@ GPIO入力はボタン・ポストセンサー等の用途で処理を分けず�
 
 Action発生条件はGPIOのエッジとする。
 
-- OFF→ON
-- ON→OFF
+- `OFF_TO_ON`
+- `ON_TO_OFF`
 
 子機CDCでは各入力について次を設定する。
 
@@ -62,7 +62,9 @@ GPIO + Edge + Action ID
 
 ---
 
-## 5. 初期Action
+## 5. 基本Actionパターン
+
+初期版では以下7種類を基本Actionパターンとする。
 
 - ご飯通知
 - ご飯通知クリア
@@ -72,9 +74,20 @@ GPIO + Edge + Action ID
 - ポスト投函
 - ポスト投函解除
 
-会議中状態からの解除は入室OKを使用する。
+会議中状態からの解除は対象家族の入室OK Actionを使用する。
 
-Action種別によって対象家族の要否を判定する。家族対象として定義された種別では対象家族を必須とし、共通対象として定義された種別では対象家族を使用しない。現時点でポスト投函系は共通対象とする。
+ご飯通知系・入室系は `FAMILY`、ポスト投函系は `COMMON` とする。
+
+FAMILY Actionは対象家族ごとに別Action IDとして登録する。同じAction内容であっても対象家族が異なれば別Action IDを使用する。
+
+```text
+Action ID 4 = 父 / 入室NG
+Action ID 5 = 母 / 入室NG
+```
+
+1つのAction IDに複数の対象家族は持たせない。親機はAction IDから対象家族を直接解決し、送信元device_idから対象家族を推測しない。
+
+7種類は固定Action IDではなく、Action定義作成時の基本パターンである。
 
 ---
 
@@ -95,8 +108,8 @@ Action ID
 Action ID
  ↓
 Action定義
- ├─ 種別
- ├─ 対象家族（必要な種別のみ）
+ ├─ target_type
+ ├─ target_family_id
  ├─ Webメッセージ
  └─ 状態変更
  ↓
@@ -105,6 +118,8 @@ Action定義
 通知設定
  ├─ 通知有無
  └─ 通知先家族
+ ↓
+通知機能
  ↓
 LINE / Slack等
 ```
@@ -115,7 +130,10 @@ LINE / Slack等
 
 - 子機と親機の設定責務を混在させない。
 - 子機は物理入力からAction IDを生成することに集中する。
-- Actionの意味は親機で一元管理する。
+- Actionの意味と対象家族は親機で一元管理する。
+- FAMILY Actionは対象家族ごとに別Action IDを持つ。
+- 1 Action IDにつき対象家族は最大1人とする。
+- COMMON Actionでは対象家族を持たない。
 - 対象者表示名は家族マスタで管理する。
 - 共通Action用のダミー家族は作らない。
 - Web表示メッセージは親機Action定義で管理し、デフォルトを持たせて親機CDCで変更可能とする。
