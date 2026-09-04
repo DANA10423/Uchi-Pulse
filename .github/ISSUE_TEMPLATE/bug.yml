@@ -84,8 +84,8 @@ body:
   - type: textarea
     id: done
     attributes:
-      label: 9. 完了条件
-      description: 修正完了の判定条件を記載してください。
+      label: 9. 受け入れ条件
+      description: Issueを完了と判断するために満たすべき条件を、チェックボックス形式で記載してください。
       placeholder: |
         - [ ] 再現手順で不具合が再発しない
         - [ ] 回帰テストが成功する
