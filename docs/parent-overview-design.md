@@ -4,7 +4,7 @@
 
 親機（Raspberry Pi Zero W / Zero 2 W）は、子機とのUDP通信、Action解釈、状態管理、履歴保存、Web UI、スマートフォン通知を担当する中央管理装置である。
 
-本書では親機の責務を定義する。子機GPIO監視およびGPIO+エッジへのAction ID割当は子機側の責務であり、本書の親機内部処理とは分離する。
+本書では親機の責務を定義する。子機GPIO監視および `GPIO + Input Event + Action ID` 割当は子機側の責務であり、親機内部処理とは分離する。
 
 ---
 
@@ -22,17 +22,23 @@
 - 通知機能への通知要求引き渡し
 - 親機自身のUSB CDC設定・保守
 
-LINE / Slack等の外部サービスへの実送信処理は通知機能として分離する。
-
 ---
 
 ## 3. 子機との責務境界
 
-子機はGPIOのOFF→ON / ON→OFFを検出し、子機CDCで設定されたAction IDをUDP EVENTとして親機へ送る。
+子機はGPIO入力からInput Eventを生成し、子機CDCで設定されたAction IDをUDP EVENTとして親機へ送る。
+
+Input Eventの初期定義:
+
+- `OFF_TO_ON`
+- `ON_TO_OFF`
+- `CLICK`
+- `DOUBLE_CLICK`
+- `LONG_PRESS`
 
 ```text
 子機
-GPIO + Edge
+GPIO + Input Event
     ↓
 Action ID
     ↓ UDP EVENT
@@ -47,7 +53,7 @@ Action定義を参照
 状態・表示・通知判断
 ```
 
-親機は、どのGPIO・どのエッジからActionが発生したかをAction定義の意味として保持しない。GPIO割当は子機設定である。
+Input Eventの検出・判定は子機側で完了する。親機はGPIO番号やInput EventをAction定義として保持・解釈しない。
 
 ---
 
@@ -65,23 +71,14 @@ Action定義は親機DBで管理する。
 - ポスト投函
 - ポスト投函解除
 
-Actionには、Action ID、名称、対象範囲 `target_type`、必要に応じた `target_family_id`、Web表示メッセージ、状態変更内容を定義する。
+Actionには、Action ID、名称、`target_type`、`target_family_id`、Web表示メッセージ、状態変更内容を定義する。
 
 - `FAMILY`: 対象家族を1人持つ。
 - `COMMON`: 対象家族を持たない。
 
-FAMILY Actionは対象家族ごとに別Action IDとして登録する。同じ入室NGであっても父用・母用は別Action IDである。
+FAMILY Actionは対象家族ごとに別Action IDとして登録する。1つのAction IDに複数家族は紐づけない。
 
-```text
-Action ID 4 = 父 / 入室NG
-Action ID 5 = 母 / 入室NG
-```
-
-1つのAction IDに複数家族は紐づけない。親機は受信したAction IDから対象家族を直接解決し、送信元device_idから対象者を推測しない。
-
-ポスト投函系は `COMMON` とする。共通対象のためのダミー家族は作成しない。
-
-対象家族の表示名は家族マスタから取得する。
+親機は受信したAction IDから対象家族を直接解決し、送信元device_idから対象者を推測しない。
 
 ---
 
@@ -89,31 +86,15 @@ Action ID 5 = 母 / 入室NG
 
 スマートフォン通知設定はAction定義から分離する。
 
-通知設定では、Actionごとの通知有無と通知先家族を管理する。Action対象者と通知先は別概念である。
+通知設定ではActionごとの通知有無と通知先家族を管理する。Action対象者と通知先は別概念である。
 
-家族ごとのLINE / Slack等の実送信先設定も別管理する。
-
-```text
-Action発生
-  ↓
-通知設定
-  ├─ OFF → 終了
-  └─ ON
-       ↓
-     通知先家族
-       ↓
-     通知機能へ通知要求
-       ↓
-     LINE / Slack等
-```
+LINE / Slack等の外部サービスへの実送信処理は通知機能として分離する。
 
 ---
 
 ## 6. 状態管理
 
 親機稼働中の現在状態はメモリ上で管理する。
-
-デバイスごとの基本状態:
 
 - `device_id`
 - `last_seen_at`
@@ -122,8 +103,6 @@ Action発生
 
 親機起動時はDBの有効デバイスを読み込み、通信状態を `INITIAL_WAIT` とする。入室可否はイベント履歴から最新値を復元する。
 
-通信状態の基本遷移:
-
 ```text
 INITIAL_WAIT --正常受信--> ONLINE
 INITIAL_WAIT --オフライン判定時間超過--> OFFLINE
@@ -131,8 +110,6 @@ ONLINE       --正常受信--> ONLINE
 ONLINE       --オフライン判定時間超過--> OFFLINE
 OFFLINE      --正常受信--> ONLINE
 ```
-
-正常受信とは通信仕様上有効なHELLO / HEARTBEAT / EVENT等を正常に解析・処理できた場合をいう。
 
 ---
 
@@ -152,8 +129,6 @@ SQLiteを使用する。
 
 通信状態等の現在値はDBの専用状態として保存しない。
 
-詳細は `docs/parent-database-design.md` を参照する。
-
 ---
 
 ## 8. Web UI
@@ -164,19 +139,13 @@ ActionのWeb表示メッセージは親機DBのAction定義から取得する。
 
 通信状態と入室可否は別項目として表示する。入室可否は家族用端末にのみ表示する。
 
-詳細は `docs/parent-web-status-design.md` を参照する。
-
 ---
 
 ## 9. CDC
 
 親機のUSB CDCは親機側設定・保守を行うために使用する。
 
-親機CDCで扱うAction関連設定には、Action定義、家族情報、Web表示メッセージ、通知設定等が含まれる。
-
-子機のGPIO+エッジ+Action ID割当は子機CDCで設定するものであり、親機CDCのAction定義とは分離する。
-
-詳細は `docs/cdc_communication_spec.md` を参照する。
+子機の `GPIO + Input Event + Action ID` 割当は子機CDCで設定し、親機CDCのAction定義とは分離する。
 
 ---
 
