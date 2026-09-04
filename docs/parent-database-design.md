@@ -14,21 +14,17 @@
 
 ### 2.1 子機側で保持する設定
 
-子機はUSB CDCで次の入力割当を設定する。
-
 - GPIO番号
-- エッジ（`OFF_TO_ON` / `ON_TO_OFF`）
+- Edge（`OFF_TO_ON` / `ON_TO_OFF`）
 - Action ID
 
 子機はAction IDの意味を解釈しない。
 
 ### 2.2 親機DBで保持する情報
 
-親機DBはAction IDの意味と、そのActionに関連する設定を管理する。
-
 - Action定義
 - 家族と表示名
-- Actionの対象家族
+- Actionの対象範囲・対象家族
 - Web表示メッセージ
 - 状態変更の意味
 - Actionごとのスマートフォン通知有無
@@ -56,8 +52,6 @@
 
 ## 4. devices
 
-子機の固定・準固定情報を管理する。
-
 | 項目 | 型 | NULL | 内容 |
 |---|---|---|---|
 | `device_id` | TEXT PK | NO | 子機ID |
@@ -73,92 +67,74 @@
 
 ## 5. families
 
-### 5.1 目的
-
-Actionの対象者およびスマートフォン通知先として参照する家族を管理する。
-
-### 5.2 項目
-
 | 項目 | 型 | NULL | 内容 |
 |---|---|---|---|
 | `family_id` | INTEGER PK | NO | 家族内部ID |
 | `display_name` | TEXT | NO | Web等に表示する名前 |
 | `enabled` | INTEGER | NO | 1=有効、0=無効 |
 
-Actionには表示名文字列を直接保存せず `family_id` を保持し、表示時に `display_name` を参照する。
-
-「家」「共通」等のダミー家族は作成しない。
+Actionには表示名文字列を直接保存せず `family_id` を参照する。「家」「共通」等のダミー家族は作成しない。
 
 ---
 
 ## 6. actions
 
-### 6.1 目的
-
-子機から通知されたAction IDを親機が解釈するための定義を管理する。
-
-### 6.2 初期Action
-
-- ご飯通知
-- ご飯通知クリア
-- 入室OK
-- 入室NG
-- 会議中
-- ポスト投函
-- ポスト投函解除
-
-会議中の解除専用Actionは設けず、入室OKで状態を変更する。
-
-### 6.3 項目
+### 6.1 項目
 
 | 項目 | 型 | NULL | 内容 |
 |---|---|---|---|
-| `action_id` | INTEGER PK | NO | 子機から通知されるAction ID |
-| `action_type` | TEXT | NO | Action種別 |
+| `action_id` | INTEGER PK | NO | Action ID |
 | `action_name` | TEXT | NO | 管理・表示用名称 |
-| `target_family_id` | INTEGER FK | YES | 対象家族。Action種別により必須 |
+| `target_type` | TEXT | NO | `FAMILY` / `COMMON` |
+| `target_family_id` | INTEGER FK | YES | FAMILYの場合の対象家族 |
 | `web_message` | TEXT | NO | Web表示メッセージ |
 | `state_type` | TEXT | NO | 変更対象状態 |
 | `state_value` | TEXT | NO | 設定する状態値 |
 | `enabled` | INTEGER | NO | 1=有効、0=無効 |
 
-### 6.4 対象者ルール
+Actionの対象範囲は `target_type` で表現する。対象範囲だけを表す曖昧な `action_type` は使用しない。
 
-対象家族が必要かどうかは `action_type` によって判定する。
+### 6.2 target_type
 
-- 家族対象として定義されたAction種別では `target_family_id` を必須とする。
-- 共通対象として定義されたAction種別では `target_family_id` を使用しない（NULL）。
-- 現時点でポスト投函系は共通対象として扱う。
-- その他の各Action種別の家族対象／共通対象の分類はAction種別定義として管理する。
+- `FAMILY`: 家族対象。`target_family_id` 必須。
+- `COMMON`: 共通対象。`target_family_id` はNULL。
 
-DBでは `target_family_id` のNULLを許容し、登録・変更時にAction種別のルールに従って整合性を検証する。
+初期Actionではポスト投函系のみ `COMMON`、その他はすべて `FAMILY` とする。
 
-### 6.5 Web表示メッセージ
+### 6.3 初期Action定義
 
-`web_message` にはActionごとのデフォルト値を用意する。親機へのUSB CDC設定により変更可能とする。
+Action ID 1〜7は固定値として予約し、既存IDの意味を後から変更しない。追加Actionは8以降を使用する。
+
+| ID | Action | target_type | state_type | state_value | デフォルト `web_message` |
+|---:|---|---|---|---|---|
+| 1 | ご飯通知 | `FAMILY` | `MEAL_NOTICE` | `ON` | `{target}：ご飯です` |
+| 2 | ご飯通知クリア | `FAMILY` | `MEAL_NOTICE` | `OFF` | `{target}：ご飯通知を解除しました` |
+| 3 | 入室OK | `FAMILY` | `ENTRY_PERMISSION` | `OK` | `{target}：入室OK` |
+| 4 | 入室NG | `FAMILY` | `ENTRY_PERMISSION` | `NG` | `{target}：入室NG` |
+| 5 | 会議中 | `FAMILY` | `ENTRY_PERMISSION` | `MEETING` | `{target}：会議中` |
+| 6 | ポスト投函 | `COMMON` | `MAILBOX` | `ON` | `ポストに投函がありました` |
+| 7 | ポスト投函解除 | `COMMON` | `MAILBOX` | `OFF` | `ポストの投函状態を解除しました` |
+
+会議中の解除専用Actionは設けず、入室OKで状態を変更する。
+
+`{target}` は `target_family_id` に対応する `families.display_name` で親機が展開する。
+
+FAMILY Actionは対象家族を伴うAction定義として登録する。COMMON Action 6・7では `target_family_id = NULL` とする。
 
 ---
 
 ## 7. Action通知設定
 
-### 7.1 基本方針
+スマートフォン通知設定はAction定義から分離する。Actionの `target_family_id` と通知先家族は別概念である。
 
-スマートフォン通知設定はAction定義から分離する。
-
-Actionは「何が起きたか、誰についてのActionか、状態をどう変えるか」を定義する。通知設定は「そのActionをスマートフォンへ通知するか、誰へ通知するか」を定義する。
-
-Actionの `target_family_id` と通知先家族は別概念である。
-
-### 7.2 action_notification_settings
+### 7.1 action_notification_settings
 
 | 項目 | 型 | NULL | 内容 |
 |---|---|---|---|
 | `action_id` | INTEGER PK/FK | NO | 対象Action |
 | `notification_enabled` | INTEGER | NO | 1=通知、0=通知しない |
 
-### 7.3 action_notification_targets
-
-通知対象が複数家族となることを許容する。
+### 7.2 action_notification_targets
 
 | 項目 | 型 | NULL | 内容 |
 |---|---|---|---|
@@ -170,10 +146,6 @@ Actionの `target_family_id` と通知先家族は別概念である。
 ---
 
 ## 8. family_notification_destinations
-
-### 8.1 目的
-
-家族ごとの外部通知先設定を管理する。LINE / Slack等のサービス固有送信先情報をAction定義から分離する。
 
 | 項目 | 型 | NULL | 内容 |
 |---|---|---|---|
@@ -189,8 +161,6 @@ Actionの `target_family_id` と通知先家族は別概念である。
 
 ## 9. events
 
-子機からUDPで受信したEVENTを履歴として保存する。
-
 | 項目 | 型 | NULL | 内容 |
 |---|---|---|---|
 | `id` | INTEGER PK | NO | 自動採番履歴ID |
@@ -201,7 +171,7 @@ Actionの `target_family_id` と通知先家族は別概念である。
 
 `(device_id, event_id)` を一意とし、UDP再送による二重登録を防止する。
 
-Action IDはUDP EVENTの `action_id` として受信し、受信JSON本文に含まれる。EVENT通信形式の詳細は `docs/parent_child_udp_communication_spec.md` で定義する。
+Action IDはUDP EVENTの `action_id` として受信する。
 
 ---
 
@@ -213,25 +183,22 @@ UDP EVENT受信
 Action ID取得
     ↓
 actions参照
-    ├─ Action種別
-    ├─ 対象家族（必要な種別のみ）
+    ├─ target_type
+    ├─ 対象家族
     ├─ Web表示メッセージ
-    └─ 状態変更内容
+    ├─ state_type
+    └─ state_value
+    ↓
+FAMILYの場合は対象家族を検証し {target} を表示名で展開
     ↓
 eventsへ履歴保存
     ↓
 メモリ上の必要な状態を更新
     ↓
-action_notification_settings参照
+通知設定を評価
     ↓
-通知ONの場合
-    ↓
-action_notification_targetsから通知先家族取得
-    ↓
-通知機能へ通知要求を引き渡す
+必要な場合は通知機能へ通知要求
 ```
-
-実際のLINE / Slack等の送信先解決および外部サービスへの送信処理は通知機能の責務とする。
 
 ---
 
@@ -248,8 +215,6 @@ action_notification_targetsから通知先家族取得
 - `status`: `INITIAL_WAIT` / `ONLINE` / `OFFLINE`
 - `room_access_status`: `UNSET` / `OK` / `NG` / `MEETING`
 
-状態遷移は次を基本とする。
-
 ```text
 INITIAL_WAIT --正常受信--> ONLINE
 INITIAL_WAIT --オフライン判定時間超過--> OFFLINE
@@ -258,23 +223,18 @@ ONLINE       --オフライン判定時間超過--> OFFLINE
 OFFLINE      --正常受信--> ONLINE
 ```
 
-正常受信とは、通信仕様上有効なHELLO / HEARTBEAT / EVENT等を正常に解析・処理できた場合をいう。
-
 通信状態が変化しても入室可否は自動変更しない。
 
 ---
 
 ## 12. 設計方針まとめ
 
-- 子機のGPIO・エッジ・Action ID割当と、親機のAction定義を混在させない。
+- 子機のGPIO・Edge・Action ID割当と親機のAction定義を混在させない。
 - 子機はAction IDの意味を解釈しない。
-- Action定義は親機DBで管理する。
-- Action対象者の表示名は家族マスタを参照する。
-- Action種別によって対象家族の必須／不要を判定する。
-- 共通Action用のダミー家族は作らない。
-- Web表示メッセージはAction定義に持ち、デフォルト値を用意して親機CDCで変更可能とする。
+- Action ID 1〜7を初期固定IDとする。
+- Actionの対象範囲は `target_type` (`FAMILY` / `COMMON`) で管理する。
+- ポスト投函系のみCOMMON、その他の初期ActionはFAMILYとする。
+- Web表示メッセージはAction定義に持ち、`{target}` を家族表示名で展開できる。
 - スマートフォン通知設定はAction定義から分離する。
-- Action対象者と通知先家族を別概念として扱う。
-- LINE / Slack等の実送信は通知機能へ分離する。
-- イベント履歴は `events` に保存する。
+- Action対象家族と通知先家族を別概念として扱う。
 - 現在状態はメモリで管理し、必要な状態はイベント履歴から復元する。
