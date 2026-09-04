@@ -2,363 +2,264 @@
 
 ## 1. 目的
 
-本書は、Uchi-Pulse 親機で使用するデータベースの基本設計を定義する。
+本書はUchi-Pulse親機で使用するSQLiteデータベースの基本設計を定義する。
 
-親機では SQLite を採用し、以下の情報を永続化する。
+親機は、デバイス情報、家族情報、Action定義、通知設定、イベント履歴を永続管理する。GPIO番号・入力エッジ・GPIOへのAction割当は子機側設定であり、親機DBのAction定義には含めない。
 
-- デバイスのマスタ情報
-- 子機から UDP で受信したイベント履歴
-
-オンライン／オフラインなどの通信状態、および入室可否の現在値そのものはデータベースへ専用状態として保存せず、親機稼働中のメモリ上で管理する。
-
-ただし、親機起動時は `devices` デバイスマスタを読み込み、登録済みの有効な子機についてメモリ上の通信状態を `INITIAL_WAIT`（未確認）として初期化する。
-
-また、家族用子機の入室可否については、`events` に保存された入室可否変更イベントの最新履歴から現在値を復元する。
+通信状態および入室可否等の現在値は親機稼働中のメモリ上で管理し、必要な状態はイベント履歴から復元する。
 
 ---
 
-## 2. データベース方式
+## 2. 責務境界
 
-| 項目 | 内容 |
-|---|---|
-| DBMS | SQLite |
-| 用途 | 親機におけるデバイス情報・イベント履歴の永続管理 |
-| 通信状態管理 | 状態そのものはDBへ保存せず、メモリ上で管理する |
-| 入室可否管理 | 現在値専用のDB項目は持たず、メモリ上で管理する。起動時はEVENT履歴から最新値を復元する |
-| 起動時状態初期化 | `devices` の有効デバイスを読み込み、`INITIAL_WAIT` としてメモリ状態を生成する |
-| 日時形式 | ISO 8601 形式の TEXT |
+### 2.1 子機側で保持する設定
+
+子機はUSB CDCで次の入力割当を設定する。
+
+- GPIO番号
+- エッジ（OFF→ON / ON→OFF）
+- Action ID
+
+子機はAction IDの意味を解釈しない。
+
+### 2.2 親機DBで保持する情報
+
+親機はAction IDの意味を定義し、次の情報を管理する。
+
+- Action定義
+- 家族と表示名
+- Actionの対象家族
+- Web表示メッセージ
+- 状態変更の意味
+- Actionごとのスマートフォン通知設定
+- 通知先家族
+- 家族ごとのLINE / Slack等の実送信先
+- イベント履歴
 
 ---
 
 ## 3. テーブル一覧
 
-| テーブル名 | 用途 |
+| テーブル | 用途 |
 |---|---|
-| `devices` | デバイスマスタ |
-| `events` | UDPイベント受信履歴。入室可否変更履歴も含む |
+| `devices` | 子機マスタ |
+| `families` | 家族マスタ |
+| `actions` | Action定義 |
+| `action_notification_settings` | Action単位の通知有無 |
+| `action_notification_targets` | Actionの通知先家族 |
+| `family_notification_destinations` | 家族ごとの外部通知送信先 |
+| `events` | UDP EVENT受信履歴 |
 
 ---
 
-## 4. devices テーブル
-
-### 4.1 目的
+## 4. devices
 
 子機の固定・準固定情報を管理する。
 
-通信状態、最終受信時刻、入室可否などの一時的・現在値の状態は保持しない。
+| 項目 | 型 | NULL | 内容 |
+|---|---|---|---|
+| `device_id` | TEXT PK | NO | 子機ID |
+| `name` | TEXT | NO | 表示名 |
+| `device_type` | TEXT | NO | 利用上の分類 |
+| `registered_at` | TEXT | NO | 登録日時 |
+| `updated_at` | TEXT | NO | 更新日時 |
+| `enabled` | INTEGER | NO | 1=有効、0=無効 |
 
-親機起動時には、本テーブルに登録されている有効な子機を状態管理の初期化元として使用する。
-
-### 4.2 項目定義
-
-| 項目名 | SQLite型 | NULL | キー | 内容 |
-|---|---|---|---|---|
-| `device_id` | TEXT | NO | PK | 子機を一意に識別するID |
-| `name` | TEXT | NO |  | 子機の表示名 |
-| `device_type` | TEXT | NO |  | 子機の利用上の分類。Web画面等での表示分類にも使用する |
-| `registered_at` | TEXT | NO |  | 登録日時。ISO 8601形式 |
-| `updated_at` | TEXT | NO |  | 最終更新日時。ISO 8601形式 |
-| `enabled` | INTEGER | NO |  | 有効／無効。`1 = 有効`、`0 = 無効` |
-
-### 4.3 制約
-
-- `device_id` を主キーとする。
-- `enabled` は `0` または `1` とする。
-- 通信状態を示す `online`、`offline`、`last_seen` 等の項目は持たない。
-- 入室可否の現在値を示す `room_access_status` 等の項目は持たない。
-- 親機起動時の状態管理対象は、原則として `enabled = 1` のデバイスとする。
-
-### 4.4 `device_type` の扱い
-
-`device_type` は、子機のハードウェア種類や通信方式を表す項目ではなく、子機の利用上の分類を表す。
-
-家族が持つ子機と、ポスト・玄関などの設備に設置する子機は、原則として通信上・機器上は同じ子機として扱う。`device_type` によって UDP 通信処理やイベント処理そのものを分岐させることは原則としない。
-
-`device_type` は主に以下の用途で使用する。
-
-- Web状態一覧画面での表示分類
-- 管理画面等で利用者が子機の役割を識別するための分類
-- 将来、利用上の分類が必要となる表示・管理機能
-
-初期の分類としては、家族が使用する端末と、ポスト等の設備に設置する端末を区別することを想定する。ただし、`PERSON`、`FACILITY` 等の具体的な値は Web画面設計と合わせて別途確定する。
-
-また、`device_type` とイベント定義は独立して扱う。
-
-例えば、ポストに設置された子機だから特定のイベントを固定的に発生させるのではなく、子機設定によって割り当てられたイベントを発生させる。これにより、イベントは特定の端末種別に依存しない。
-
-```text
-Device
-  device_id
-  name
-  device_type
-
-      ↓ 子機設定に従ってイベント発生
-
-Event
-  event_id
-
-      ↓ 必要に応じて
-
-Macro / Notification
-```
-
-したがって、以下の責務を分離する。
-
-| 情報 | 責務 |
-|---|---|
-| `device_id` | どの子機であるかを識別する |
-| `name` | 利用者向けの表示名 |
-| `device_type` | 子機の利用上の分類 |
-| 子機設定 | GPIO等の入出力とイベント等の動作を定義する |
-| `event_id` | 何のイベントが発生したかを識別する |
-| マクロ | イベント等を契機に実行する処理を定義する |
-| `DeviceState` | 現在の通信状態・入室可否を管理する |
-
-### 4.5 CREATE TABLE 例
-
-```sql
-CREATE TABLE devices (
-    device_id      TEXT PRIMARY KEY,
-    name           TEXT NOT NULL,
-    device_type    TEXT NOT NULL,
-    registered_at  TEXT NOT NULL,
-    updated_at     TEXT NOT NULL,
-    enabled        INTEGER NOT NULL CHECK (enabled IN (0, 1))
-);
-```
+`device_type` は表示・管理上の分類であり、GPIOやAction処理を分岐させるためには使用しない。
 
 ---
 
-## 5. events テーブル
+## 5. families
 
 ### 5.1 目的
 
-子機から UDP で受信したイベントを履歴として保存する。
+Actionの対象者およびスマートフォン通知先として参照する家族を管理する。
 
-保存対象は、受信したイベントの識別情報、親機での受信日時、および UDP で受信した JSON 本文とする。
+### 5.2 項目
 
-通信状態そのものは本テーブルでは管理しない。
+| 項目 | 型 | NULL | 内容 |
+|---|---|---|---|
+| `family_id` | INTEGER PK | NO | 家族内部ID |
+| `display_name` | TEXT | NO | Web等に表示する名前 |
+| `enabled` | INTEGER | NO | 1=有効、0=無効 |
 
-入室可否については現在値専用の項目を設けず、入室可否変更をイベントとして本テーブルへ保存する。親機起動時には、この履歴から各家族用子機の最新の入室可否を復元する。
+Actionには表示名文字列を直接保存せず `family_id` を保持し、表示時に `display_name` を参照する。
 
-イベントは特定の `device_type` に依存するものとして定義しない。同じイベント定義を異なる子機から発生させることを許容する。
-
-### 5.2 項目定義
-
-| 項目名 | SQLite型 | NULL | キー | 内容 |
-|---|---|---|---|---|
-| `id` | INTEGER | NO | PK | 親機DB内部の履歴ID。自動採番 |
-| `received_at` | TEXT | NO |  | 親機がUDPデータを受信した日時。ISO 8601形式 |
-| `device_id` | TEXT | NO |  | 送信元デバイスID |
-| `event_id` | TEXT | NO |  | 子機が付与したイベントID |
-| `payload` | TEXT | NO |  | UDPで受信したJSON本文 |
-
-### 5.3 制約
-
-- `id` を主キーとし、自動採番する。
-- `(device_id, event_id)` を一意とする。
-- UDP再送で同一イベントを再受信した場合は、同じイベントを二重登録しない。
-- `payload` には、親機側で再構築したJSONではなく、UDPで実際に受信したJSON本文を保存する。
-- 入室可否変更イベントについても通常のEVENTとして保存する。
-- 入室可否の具体的なイベント識別方法やJSON形式は、イベント仕様の詳細設計で定義する。
-
-### 5.4 CREATE TABLE 例
-
-```sql
-CREATE TABLE events (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    received_at  TEXT NOT NULL,
-    device_id    TEXT NOT NULL,
-    event_id     TEXT NOT NULL,
-    payload      TEXT NOT NULL,
-    UNIQUE (device_id, event_id)
-);
-```
+「家」「共通」等のダミー家族は作成しない。
 
 ---
 
-## 6. イベント登録時の基本動作
+## 6. actions
 
-子機からイベントを受信した場合、親機は以下の考え方で処理する。
+### 6.1 目的
 
-1. UDPデータを受信する。
-2. JSONを解析し、`device_id` と `event_id` を取得する。
-3. 親機側で `received_at` を付与する。
-4. `events` テーブルへ登録する。
-5. `(device_id, event_id)` が既に存在する場合は再登録しない。
-6. EVENTについては、重複受信であっても通信仕様に従ってACKを返す。
-7. 正常なUDPメッセージを受信した場合は、DB登録処理とは別にメモリ上の通信状態を更新する。
-8. 入室可否変更イベントの場合は、対象デバイスのメモリ上の `room_access_status` を更新する。
+子機から通知されたAction IDを親機が解釈するための定義を管理する。
+
+### 6.2 初期Action
+
+- ご飯通知
+- ご飯通知クリア
+- 入室OK
+- 入室NG
+- 会議中
+- ポスト投函
+- ポスト投函解除
+
+会議中の解除専用Actionは設けず、入室OKで状態を変更する。
+
+### 6.3 項目
+
+| 項目 | 型 | NULL | 内容 |
+|---|---|---|---|
+| `action_id` | INTEGER PK | NO | 子機から通知されるAction ID |
+| `action_type` | TEXT | NO | Action種別 |
+| `action_name` | TEXT | NO | 管理・表示用名称 |
+| `target_family_id` | INTEGER FK | YES | 対象家族。種別により必須 |
+| `web_message` | TEXT | NO | Web表示メッセージ |
+| `state_type` | TEXT | NO | 変更対象状態 |
+| `state_value` | TEXT | NO | 設定する状態値 |
+| `enabled` | INTEGER | NO | 1=有効、0=無効 |
+
+### 6.4 対象者ルール
+
+対象家族が必要かどうかは `action_type` によって判定する。
+
+- ご飯通知系: `target_family_id` 必須
+- 入室状態系: `target_family_id` 必須
+- ポスト投函系: `target_family_id` 不要（NULL）
+
+DBではNULLを許容するが、登録・変更時にAction種別に応じて整合性を検証する。
+
+### 6.5 Webメッセージ
+
+`web_message` にはActionごとのデフォルト値を用意する。親機へのUSB CDC設定により変更可能とする。
 
 ---
 
-## 7. 状態管理とデータベースの関係
+## 7. Action通知設定
 
 ### 7.1 基本方針
 
-現在状態はデータベースへ専用状態として永続化せず、親機稼働中のメモリ上で管理する。
+スマートフォン通知はAction定義から分離する。
 
-データベースとメモリの責務は以下のように分離する。
+Actionは「何が起きたか、誰についてのActionか、状態をどう変えるか」を定義する。通知設定は「そのActionをスマートフォンへ通知するか、誰へ通知するか」を定義する。
 
-- `devices`: 親機が管理対象として登録している子機
-- `events`: 受信済みイベントの履歴。入室可否変更履歴も含む
-- メモリ上の `DeviceState`: 現在の通信状態・入室可否
+Actionの `target_family_id` と通知先家族は別概念である。
 
-DBは「登録情報と過去に発生した事実」を保持し、メモリは「現在利用する状態」を保持する。
+### 7.2 action_notification_settings
 
-### 7.2 DeviceState
+| 項目 | 型 | NULL | 内容 |
+|---|---|---|---|
+| `action_id` | INTEGER PK/FK | NO | 対象Action |
+| `notification_enabled` | INTEGER | NO | 1=通知、0=通知しない |
 
-メモリ上では、デバイスごとに最低限以下の情報を管理する。
+### 7.3 action_notification_targets
 
-| 項目 | 内容 |
-|---|---|
-| `device_id` | 子機ID |
-| `last_seen_at` | 最後に正常なUDPメッセージを受信した日時。初期接続待ち中は未設定 |
-| `status` | 通信状態。`INITIAL_WAIT` / `ONLINE` / `OFFLINE` |
-| `room_access_status` | 入室可否。`UNSET` / `OK` / `NG` / `MEETING` |
+通知対象が複数家族となることを許容する。
 
-`room_access_status` は主に家族用子機で利用する。設備用子機については表示・利用対象としない。
+| 項目 | 型 | NULL | 内容 |
+|---|---|---|---|
+| `action_id` | INTEGER FK | NO | 対象Action |
+| `family_id` | INTEGER FK | NO | 通知先家族 |
 
-### 7.3 通信状態の意味
-
-| 状態 | Web表示例 | 意味 |
-|---|---|---|
-| `INITIAL_WAIT` | 未確認 | 親機起動後、その子機からまだ一度も正常な通信を確認していない |
-| `ONLINE` | オンライン | 正常な通信を確認済みで、オフライン判定時間内に通信がある |
-| `OFFLINE` | オフライン | 一度通信を確認したが、その後オフライン判定時間を超えて正常な通信がない |
-
-`INITIAL_WAIT` は、DBへ未登録という意味ではない。DBには登録済みだが、現在起動している親機がまだ通信を確認していない状態を表す。
-
-### 7.4 入室可否の意味
-
-| 状態 | Web表示 | 意味 |
-|---|---|---|
-| `UNSET` | 未設定 | 入室可否が設定されていない |
-| `OK` | OK | 入室してよい |
-| `NG` | NG | 入室しないでほしい |
-| `MEETING` | 会議中 | 会議・通話等のため入室を控えてほしい |
-
-「在宅／外出」は別状態として管理せず、家庭内利用上は通信状態を参照する。
-
-「取り込み中」等の追加状態も設けず、用途に応じて `NG` または `MEETING` で表現する。
-
-### 7.5 親機起動時の初期化と復元
-
-親機起動時は以下の順序で状態管理を初期化する。
-
-1. SQLiteをオープンし、必要なテーブルを初期化する。
-2. `devices` から `enabled = 1` のデバイスを取得する。
-3. 各デバイスについてメモリ上に `DeviceState` を生成する。
-4. `status = INITIAL_WAIT` とする。
-5. `last_seen_at` は未設定とする。
-6. `room_access_status = UNSET` とする。
-7. 家族用子機について `events` から最新の入室可否変更イベントを検索する。
-8. 最新履歴が存在する場合、その値を `room_access_status` に設定する。
-9. 履歴が存在しない場合は `UNSET` のままとする。
-10. UDP受信を開始する。
-
-通信状態自体をDBやイベント履歴から復元することはしない。
-
-一方、入室可否は利用者が明示的に変更した状態であるため、EVENT履歴を状態復元の根拠として利用する。
-
-### 7.6 正常受信時の状態更新
-
-`HELLO`、`EVENT`、`HEARTBEAT` など、通信仕様上有効なUDPメッセージを受信した場合は、対象デバイスの状態を以下のように更新する。
-
-- `last_seen_at = 現在時刻`
-- `status = ONLINE`
-
-入室可否変更を表すEVENTの場合は、加えて `room_access_status` をイベント内容に従って更新する。
-
-そのため、通信状態については以下の遷移を許可する。
-
-```text
-INITIAL_WAIT --正常受信--> ONLINE
-OFFLINE      --正常受信--> ONLINE
-ONLINE       --正常受信--> ONLINE
-```
-
-### 7.7 オフライン判定
-
-定期的に `last_seen_at` を確認し、設定されたオフライン判定時間を超えて正常な通信を受信していない場合は `OFFLINE` とする。
-
-```text
-ONLINE --オフライン判定時間超過--> OFFLINE
-```
-
-`INITIAL_WAIT` は、親機起動後まだ一度も通信を確認していない状態であるため、単純に `OFFLINE` と同一視しない。
-
-OFFLINEになったデバイスの `DeviceState` は削除せず保持し、再び正常な通信を受信した場合は `ONLINE` に復帰させる。
-
-通信状態が変化しても `room_access_status` は自動変更しない。
-
-### 7.8 Web表示との関係
-
-Web画面では、DBに登録されたデバイスと現在のメモリ状態を組み合わせて表示する。
-
-これにより、親機起動直後でも登録済みデバイス一覧を表示でき、通信確認前のデバイスを「登録なし」ではなく「未確認」として表現できる。
-
-家族用子機については、通信状態に加えて入室可否も表示する。親機再起動後の入室可否は `events` の最新履歴から復元された値を使用する。
-
-また、`devices.device_type` を利用して、家族が使用する子機とポスト等の設備に設置する子機などを表示上分類できる。ただし、この分類は通信処理やイベント処理の違いを意味しない。
+主キーは `(action_id, family_id)` とする。
 
 ---
 
-## 8. 入室可否履歴の利用方針
+## 8. family_notification_destinations
 
-入室可否は専用の状態テーブルや `devices` のカラムでは管理しない。
+### 8.1 目的
 
-入室可否変更は通常のEVENTとして保存し、その履歴を現在状態の復元に利用する。
+家族ごとの実際の外部通知先を管理する。LINE / Slack等のサービス固有情報をAction定義から分離する。
 
-概念的には以下の流れとなる。
+| 項目 | 型 | NULL | 内容 |
+|---|---|---|---|
+| `id` | INTEGER PK | NO | 内部ID |
+| `family_id` | INTEGER FK | NO | 家族 |
+| `notification_type` | TEXT | NO | LINE / Slack等 |
+| `destination` | TEXT | NO | サービス上の実送信先情報 |
+| `enabled` | INTEGER | NO | 1=有効、0=無効 |
 
-```text
-子機で入室可否変更
-        │
-        ▼
-EVENT送信
-        │
-        ▼
-親機受信
-  ├─ eventsへ保存
-  └─ DeviceState.room_access_status 更新
-
-        ... 親機停止 ...
-
-親機再起動
-        │
-        ▼
-devices から DeviceState 生成
-        │
-        ▼
-events から各家族用子機の
-最新の入室可否変更EVENTを検索
-        │
-        ├─ 履歴あり → 最新値を復元
-        └─ 履歴なし → UNSET
-```
-
-この方式により、現在値専用テーブルを追加せず、イベント履歴を「過去に発生した事実」として保持しながら、必要な現在状態を再構築できる。
-
-最新入室可否イベントの検索方法、インデックス追加の要否、イベントの具体的な識別方法は詳細設計・実装時に決定する。
+通知サービス固有の認証情報・秘密情報の保存方式は通知機能の詳細設計で別途定義する。
 
 ---
 
-## 9. 設計方針
+## 9. events
 
-本データベースは、家庭内用途でのシンプルな運用を前提とし、必要最小限の構成とする。
+子機からUDPで受信したEVENTを履歴として保存する。
 
-- デバイスの固定情報は `devices` に集約する。
-- `device_type` は子機の利用上の分類として扱い、ハードウェア種類や通信方式を表すものとはしない。
-- `device_type` はWeb表示等の分類に利用できるが、通信処理・イベント処理を分岐するためには原則使用しない。
-- イベント定義は特定の端末や `device_type` に依存させない。
-- イベント履歴は `events` に記録する。
-- 通信状態の現在値をDBへ持ち込まない。
-- 入室可否の現在値も専用DB項目として保持しない。
-- 入室可否変更はEVENTとして履歴化し、親機起動時に最新履歴から現在値を復元する。
-- 親機起動時はDBのデバイスマスタを状態管理の初期化元として利用する。
-- 登録済みデバイスの通信初期状態は `INITIAL_WAIT`（未確認）とする。
-- 正常な通信を受信したデバイスは `ONLINE` とする。
-- 一度ONLINEになった後、一定時間通信がない場合は `OFFLINE` とする。
-- UDP再送によるイベントの二重登録を防止する。
-- 将来の機能追加が必要になった場合は、既存テーブルへ不要な状態項目を追加するのではなく、用途に応じて履歴・設定テーブル等を追加する。
+| 項目 | 型 | NULL | 内容 |
+|---|---|---|---|
+| `id` | INTEGER PK | NO | 自動採番履歴ID |
+| `received_at` | TEXT | NO | 親機受信日時 |
+| `device_id` | TEXT | NO | 送信元子機 |
+| `event_id` | TEXT | NO | UDP EVENTの一意ID |
+| `payload` | TEXT | NO | 受信JSON本文 |
+
+`(device_id, event_id)` を一意とし、UDP再送による二重登録を防止する。
+
+Action IDはUDP EVENT payloadに含まれる情報として解釈する。EVENT通信形式の詳細は `parent_child_udp_communication_spec.md` で定義する。
+
+---
+
+## 10. Action受信時の親機処理
+
+```text
+UDP EVENT受信
+    ↓
+Action ID取得
+    ↓
+actions参照
+    ├─ Action種別
+    ├─ 対象家族
+    ├─ Web表示メッセージ
+    └─ 状態変更内容
+    ↓
+eventsへ履歴保存
+    ↓
+メモリ上の必要な状態を更新
+    ↓
+action_notification_settings参照
+    ↓
+通知ONの場合
+    ↓
+action_notification_targetsから通知先家族取得
+    ↓
+family_notification_destinationsから実送信先取得
+    ↓
+LINE / Slack等へ通知
+```
+
+---
+
+## 11. 現在状態とDB
+
+通信状態や入室可否等の現在値そのものは専用DB状態として保持せず、親機メモリ上で管理する。
+
+親機起動時は `devices` の有効な子機から `DeviceState` を生成し、通信状態を `INITIAL_WAIT` とする。入室可否は `events` に保存された最新の入室可否Action履歴から復元する。
+
+`DeviceState` の基本情報:
+
+- `device_id`
+- `last_seen_at`
+- `status`: `INITIAL_WAIT` / `ONLINE` / `OFFLINE`
+- `room_access_status`: `UNSET` / `OK` / `NG` / `MEETING`
+
+正常なHELLO / EVENT / HEARTBEAT受信でONLINEへ更新し、オフライン判定時間を超えた場合はOFFLINEとする。通信状態が変化しても入室可否は自動変更しない。
+
+---
+
+## 12. 設計方針まとめ
+
+- 子機のGPIO・エッジ・Action ID割当と、親機のAction定義を混在させない。
+- 子機はAction IDの意味を知らない。
+- Action定義は親機DBで管理する。
+- Action対象者の表示名は家族マスタを参照する。
+- Action種別によって対象家族の必須／不要を判定する。
+- 共通Action用のダミー家族は作らない。
+- Web表示メッセージはAction定義に持ち、デフォルト値を用意して親機CDCで変更可能とする。
+- スマートフォン通知設定はAction定義から分離する。
+- Action対象者と通知先家族を別概念として扱う。
+- LINE / Slack等の実送信先は家族に紐づけて別管理する。
+- イベント履歴は `events` に保存する。
+- 現在状態はメモリで管理し、必要な状態はイベント履歴から復元する。
