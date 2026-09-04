@@ -124,11 +124,12 @@ Actionには表示名文字列を直接保存せず `family_id` を保持し、�
 
 対象家族が必要かどうかは `action_type` によって判定する。
 
-- ご飯通知系: `target_family_id` 必須
-- 入室状態系: `target_family_id` 必須
-- ポスト投函系: `target_family_id` 不要（NULL）
+- 家族対象として定義されたAction種別では `target_family_id` を必須とする。
+- 共通対象として定義されたAction種別では `target_family_id` を使用しない（NULL）。
+- 現時点でポスト投函系は共通対象として扱う。
+- ご飯通知系・入室系を含む各Action種別の家族対象／共通対象の分類はAction種別定義として管理する。
 
-DBではNULLを許容するが、登録・変更時にAction種別に応じて整合性を検証する。
+DBでは `target_family_id` のNULLを許容し、登録・変更時にAction種別のルールに従って整合性を検証する。
 
 ### 6.5 Webメッセージ
 
@@ -211,7 +212,7 @@ Action ID取得
     ↓
 actions参照
     ├─ Action種別
-    ├─ 対象家族
+    ├─ 対象家族（必要な種別のみ）
     ├─ Web表示メッセージ
     └─ 状態変更内容
     ↓
