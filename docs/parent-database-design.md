@@ -4,7 +4,7 @@
 
 本書はUchi-Pulse親機で使用するSQLiteデータベースの基本設計を定義する。
 
-親機は、デバイス情報、家族情報、Action定義、通知設定、イベント履歴を永続管理する。GPIO番号・入力エッジ・GPIOへのAction割当は子機側設定であり、親機DBのAction定義には含めない。
+親機は、デバイス情報、家族情報、Action定義、通知設定、イベント履歴を永続管理する。GPIO番号・入力エッジ・GPIOへのAction ID割当は子機側設定であり、親機DBのAction定義には含めない。
 
 通信状態および入室可否等の現在値は親機稼働中のメモリ上で管理し、必要な状態はイベント履歴から復元する。
 
@@ -17,24 +17,26 @@
 子機はUSB CDCで次の入力割当を設定する。
 
 - GPIO番号
-- エッジ（OFF→ON / ON→OFF）
+- エッジ（`OFF_TO_ON` / `ON_TO_OFF`）
 - Action ID
 
 子機はAction IDの意味を解釈しない。
 
 ### 2.2 親機DBで保持する情報
 
-親機はAction IDの意味を定義し、次の情報を管理する。
+親機DBはAction IDの意味と、そのActionに関連する設定を管理する。
 
 - Action定義
 - 家族と表示名
 - Actionの対象家族
 - Web表示メッセージ
 - 状態変更の意味
-- Actionごとのスマートフォン通知設定
+- Actionごとのスマートフォン通知有無
 - 通知先家族
-- 家族ごとのLINE / Slack等の実送信先
+- 家族ごとのLINE / Slack等の実送信先設定
 - イベント履歴
+
+外部サービスへの実際の通知送信処理は通知機能が担当し、DB層の責務には含めない。
 
 ---
 
@@ -47,7 +49,7 @@
 | `actions` | Action定義 |
 | `action_notification_settings` | Action単位の通知有無 |
 | `action_notification_targets` | Actionの通知先家族 |
-| `family_notification_destinations` | 家族ごとの外部通知送信先 |
+| `family_notification_destinations` | 家族ごとの外部通知送信先設定 |
 | `events` | UDP EVENT受信履歴 |
 
 ---
@@ -114,7 +116,7 @@ Actionには表示名文字列を直接保存せず `family_id` を保持し、�
 | `action_id` | INTEGER PK | NO | 子機から通知されるAction ID |
 | `action_type` | TEXT | NO | Action種別 |
 | `action_name` | TEXT | NO | 管理・表示用名称 |
-| `target_family_id` | INTEGER FK | YES | 対象家族。種別により必須 |
+| `target_family_id` | INTEGER FK | YES | 対象家族。Action種別により必須 |
 | `web_message` | TEXT | NO | Web表示メッセージ |
 | `state_type` | TEXT | NO | 変更対象状態 |
 | `state_value` | TEXT | NO | 設定する状態値 |
@@ -127,11 +129,11 @@ Actionには表示名文字列を直接保存せず `family_id` を保持し、�
 - 家族対象として定義されたAction種別では `target_family_id` を必須とする。
 - 共通対象として定義されたAction種別では `target_family_id` を使用しない（NULL）。
 - 現時点でポスト投函系は共通対象として扱う。
-- ご飯通知系・入室系を含む各Action種別の家族対象／共通対象の分類はAction種別定義として管理する。
+- その他の各Action種別の家族対象／共通対象の分類はAction種別定義として管理する。
 
 DBでは `target_family_id` のNULLを許容し、登録・変更時にAction種別のルールに従って整合性を検証する。
 
-### 6.5 Webメッセージ
+### 6.5 Web表示メッセージ
 
 `web_message` にはActionごとのデフォルト値を用意する。親機へのUSB CDC設定により変更可能とする。
 
@@ -141,7 +143,7 @@ DBでは `target_family_id` のNULLを許容し、登録・変更時にAction種
 
 ### 7.1 基本方針
 
-スマートフォン通知はAction定義から分離する。
+スマートフォン通知設定はAction定義から分離する。
 
 Actionは「何が起きたか、誰についてのActionか、状態をどう変えるか」を定義する。通知設定は「そのActionをスマートフォンへ通知するか、誰へ通知するか」を定義する。
 
@@ -171,7 +173,7 @@ Actionの `target_family_id` と通知先家族は別概念である。
 
 ### 8.1 目的
 
-家族ごとの実際の外部通知先を管理する。LINE / Slack等のサービス固有情報をAction定義から分離する。
+家族ごとの外部通知先設定を管理する。LINE / Slack等のサービス固有送信先情報をAction定義から分離する。
 
 | 項目 | 型 | NULL | 内容 |
 |---|---|---|---|
@@ -199,7 +201,7 @@ Actionの `target_family_id` と通知先家族は別概念である。
 
 `(device_id, event_id)` を一意とし、UDP再送による二重登録を防止する。
 
-Action IDはUDP EVENT payloadに含まれる情報として解釈する。EVENT通信形式の詳細は `parent_child_udp_communication_spec.md` で定義する。
+Action IDはUDP EVENTの `action_id` として受信し、受信JSON本文に含まれる。EVENT通信形式の詳細は `docs/parent_child_udp_communication_spec.md` で定義する。
 
 ---
 
@@ -226,10 +228,10 @@ action_notification_settings参照
     ↓
 action_notification_targetsから通知先家族取得
     ↓
-family_notification_destinationsから実送信先取得
-    ↓
-LINE / Slack等へ通知
+通知機能へ通知要求を引き渡す
 ```
+
+実際のLINE / Slack等の送信先解決および外部サービスへの送信処理は通知機能の責務とする。
 
 ---
 
@@ -246,14 +248,26 @@ LINE / Slack等へ通知
 - `status`: `INITIAL_WAIT` / `ONLINE` / `OFFLINE`
 - `room_access_status`: `UNSET` / `OK` / `NG` / `MEETING`
 
-正常なHELLO / EVENT / HEARTBEAT受信でONLINEへ更新し、オフライン判定時間を超えた場合はOFFLINEとする。通信状態が変化しても入室可否は自動変更しない。
+状態遷移は次を基本とする。
+
+```text
+INITIAL_WAIT --正常受信--> ONLINE
+INITIAL_WAIT --オフライン判定時間超過--> OFFLINE
+ONLINE       --正常受信--> ONLINE
+ONLINE       --オフライン判定時間超過--> OFFLINE
+OFFLINE      --正常受信--> ONLINE
+```
+
+正常受信とは、通信仕様上有効なHELLO / HEARTBEAT / EVENT等を正常に解析・処理できた場合をいう。
+
+通信状態が変化しても入室可否は自動変更しない。
 
 ---
 
 ## 12. 設計方針まとめ
 
 - 子機のGPIO・エッジ・Action ID割当と、親機のAction定義を混在させない。
-- 子機はAction IDの意味を知らない。
+- 子機はAction IDの意味を解釈しない。
 - Action定義は親機DBで管理する。
 - Action対象者の表示名は家族マスタを参照する。
 - Action種別によって対象家族の必須／不要を判定する。
@@ -261,6 +275,6 @@ LINE / Slack等へ通知
 - Web表示メッセージはAction定義に持ち、デフォルト値を用意して親機CDCで変更可能とする。
 - スマートフォン通知設定はAction定義から分離する。
 - Action対象者と通知先家族を別概念として扱う。
-- LINE / Slack等の実送信先は家族に紐づけて別管理する。
+- LINE / Slack等の実送信は通知機能へ分離する。
 - イベント履歴は `events` に保存する。
 - 現在状態はメモリで管理し、必要な状態はイベント履歴から復元する。
