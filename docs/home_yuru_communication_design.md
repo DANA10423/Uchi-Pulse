@@ -34,11 +34,6 @@ Action発生条件は次のEdgeとする。
 | `edge` | `OFF_TO_ON` / `ON_TO_OFF` |
 | `action_id` | 発生時に送信するAction ID |
 
-```text
-GPIO 5 / OFF_TO_ON / Action ID 1
-GPIO 5 / ON_TO_OFF / Action ID 2
-```
-
 子機はAction名、対象家族、Web表示メッセージ、状態変更内容、通知設定、LINE / Slack等の送信先を保持・解釈しない。
 
 ---
@@ -63,27 +58,42 @@ Actionの対象範囲は `target_type` で明示する。
 - `FAMILY`: 家族対象。`target_family_id` 必須。
 - `COMMON`: 共通対象。`target_family_id` はNULL。
 
-対象範囲だけを表すため、`action_type` は使用しない。
+### 3.2 Action IDと対象家族
 
-### 3.2 初期Action
+家族対象Actionは対象家族ごとに別Action IDを登録する。
 
-Action ID 1〜7は固定値として予約する。既存IDの意味は後から変更せず、追加Actionは8以降を使用する。
+同じAction内容であっても対象家族が異なる場合は別Actionとして扱う。
 
-| ID | Action | target_type | state_type | state_value | デフォルトWebメッセージ |
-|---:|---|---|---|---|---|
-| 1 | ご飯通知 | `FAMILY` | `MEAL_NOTICE` | `ON` | `{target}：ご飯です` |
-| 2 | ご飯通知クリア | `FAMILY` | `MEAL_NOTICE` | `OFF` | `{target}：ご飯通知を解除しました` |
-| 3 | 入室OK | `FAMILY` | `ENTRY_PERMISSION` | `OK` | `{target}：入室OK` |
-| 4 | 入室NG | `FAMILY` | `ENTRY_PERMISSION` | `NG` | `{target}：入室NG` |
-| 5 | 会議中 | `FAMILY` | `ENTRY_PERMISSION` | `MEETING` | `{target}：会議中` |
-| 6 | ポスト投函 | `COMMON` | `MAILBOX` | `ON` | `ポストに投函がありました` |
-| 7 | ポスト投函解除 | `COMMON` | `MAILBOX` | `OFF` | `ポストの投函状態を解除しました` |
+```text
+Action ID 4 = 父 / 入室NG
+Action ID 5 = 母 / 入室NG
+```
 
-「会議中」の解除専用Actionは設けず、`入室OK` で状態を変更する。
+1つのAction IDが持つ `target_family_id` は最大1件とする。複数家族を1つのAction IDに紐づけない。
 
-ポスト投函系のみ共通Actionとし、それ以外の初期Actionはすべて家族Actionとする。
+親機は受信したAction IDからAction内容と対象家族を直接解決する。送信元 `device_id` からAction対象者を推測しない。
 
-### 3.3 対象家族とメッセージ
+### 3.3 基本Actionパターン
+
+初期版では次の7種類を基本Actionパターンとして用意する。
+
+| Action | target_type | state_type | state_value | デフォルトWebメッセージ |
+|---|---|---|---|---|
+| ご飯通知 | `FAMILY` | `MEAL_NOTICE` | `ON` | `{target}：ご飯です` |
+| ご飯通知クリア | `FAMILY` | `MEAL_NOTICE` | `OFF` | `{target}：ご飯通知を解除しました` |
+| 入室OK | `FAMILY` | `ENTRY_PERMISSION` | `OK` | `{target}：入室OK` |
+| 入室NG | `FAMILY` | `ENTRY_PERMISSION` | `NG` | `{target}：入室NG` |
+| 会議中 | `FAMILY` | `ENTRY_PERMISSION` | `MEETING` | `{target}：会議中` |
+| ポスト投函 | `COMMON` | `MAILBOX` | `ON` | `ポストに投函がありました` |
+| ポスト投函解除 | `COMMON` | `MAILBOX` | `OFF` | `ポストの投函状態を解除しました` |
+
+この7種類は固定Action IDではない。
+
+FAMILYの5種類は必要な家族ごとにAction定義を作成するため、Action ID数が家族数に応じて増えることを許容する。COMMONの2種類は対象家族を持たない。
+
+「会議中」の解除専用Actionは設けず、対象家族の `入室OK` Actionを使用する。
+
+### 3.4 対象家族とメッセージ
 
 `FAMILY` Actionでは `target_family_id` を必須とし、家族マスタの `display_name` を参照する。
 
@@ -93,7 +103,7 @@ Action ID 1〜7は固定値として予約する。既存IDの意味は後から
 
 Web表示メッセージにはデフォルト値を用意し、親機CDCで変更可能とする。
 
-### 3.4 通知設定
+### 3.5 通知設定
 
 スマートフォン通知はAction定義から分離する。
 
@@ -162,4 +172,4 @@ Action定義参照
 - `docs/parent-overview-design.md`
 - `docs/parent-web-status-design.md`
 
-初期Action ID、対象範囲、状態種別・状態値は本書の定義を基準とする。
+基本Actionパターン、対象範囲、状態種別・状態値は本書の定義を基準とする。実際のAction IDはAction定義ごとに一意に割り当てる。
