@@ -1,15 +1,11 @@
 # 親機 Web状態表示 設計書
 
 ## 1. 目的
-
 親機Web UIにおける状態表示の基本方針を定義する。
 
 Web表示は親機が管理する情報を使用する。子機はWeb表示メッセージや対象者表示名を保持・生成しない。
 
----
-
 ## 2. 表示情報の取得元
-
 | 表示情報 | 取得元 |
 |---|---|
 | デバイス名・分類 | 親機DB `devices` |
@@ -19,22 +15,15 @@ Web表示は親機が管理する情報を使用する。子機はWeb表示メ�
 | 通信状態 | 親機メモリ `DeviceState` |
 | 入室可否 | 親機メモリ `DeviceState.room_access_status` |
 
-Actionの対象者名を子機EVENTに表示文字列として持たせず、親機がAction IDから `target_family_id` を取得し、家族マスタから表示名を解決する。
-
----
-
 ## 3. 状態一覧
-
 通信状態と入室可否は別項目として表示する。
 
 通信状態:
-
 - 未確認 (`INITIAL_WAIT`)
 - オンライン (`ONLINE`)
 - オフライン (`OFFLINE`)
 
 入室可否:
-
 - 未設定 (`UNSET`)
 - OK (`OK`)
 - NG (`NG`)
@@ -42,79 +31,60 @@ Actionの対象者名を子機EVENTに表示文字列として持たせず、親
 
 入室可否は家族用端末にのみ表示する。
 
-最終確認時刻や最終イベントは状態一覧へ常時表示しない。
+ご飯通知、おやつ通知、HELP通知は一覧の常時表示列には追加しない。Actionメッセージ等の別表示で扱う。
 
----
+最終確認時刻、最終イベント、IPアドレス、通信診断情報は常時表示しない。
 
 ## 4. Actionメッセージ
+`actions.web_message` はWeb表示専用とする。
 
-ActionのWeb表示メッセージは親機DBのAction定義に保持する。
+`web_message` はNULLを許容する。入室問い合わせ等の通知専用ActionではWeb表示を行わない設定を可能とする。
 
-初期値をシステム側で用意し、親機へのUSB CDC設定によって変更可能とする。
-
-Web UIは子機から受信したAction IDを直接表示用文字列として解釈せず、親機のAction定義を参照する。
+FAMILY Actionの `{target}` は `target_family_id` に対応する `families.display_name` で展開する。
 
 ```text
-子機EVENT
-  Action ID
-      ↓
-親機Action定義
-  ├─ target_type
-  ├─ target_family_id
-  └─ web_message
-      ↓
-Web表示
+子機EVENT(Action ID)
+ ↓
+Action本体
+ ├─ target_family_id
+ └─ web_message
+ ↓
+web_message が定義されている場合のみWeb表示
 ```
 
----
-
-## 5. 対象者表示
-
-`FAMILY` Actionでは、Action IDごとに1つの `target_family_id` が登録されている。親機はその `target_family_id` から家族マスタを参照し、`display_name` を表示に使用する。
-
-同じAction内容でも対象家族が異なる場合は別Action IDである。そのためWeb表示処理は送信元 `device_id` から対象家族を推測しない。
-
-`COMMON` Actionでは `target_family_id` を持たないため、家族名を付加しない。
-
-`web_message` 内の `{target}` はFAMILY Actionの場合に対象家族の `display_name` で展開する。
-
----
-
-## 6. 通知との分離
-
+## 5. 通知との分離
 Web表示とスマートフォン通知は別処理とする。
 
-Actionの `web_message` はWeb表示に使用する。スマートフォンへ通知するかどうか、誰へ通知するかはActionとは別の通知設定を参照する。
+- Web: `actions.web_message`
+- 通知: `action_notification_settings.notification_message`
 
-したがって、Web表示対象者とスマートフォン通知先が同一である必要はない。
+Web表示対象と通知対象が同一である必要はない。
 
----
-
-## 7. 責務境界
-
+## 6. 責務境界
 子機:
-
 - GPIO監視
-- `OFF_TO_ON` / `ON_TO_OFF` 検出
-- Action ID発生
+- Input Event判定
+- Action ID決定
 - UDP EVENT送信
 
-親機:
+Input Event:
+- `OFF_TO_ON`
+- `ON_TO_OFF`
+- `CLICK`
+- `DOUBLE_CLICK`
+- `LONG_PRESS`
 
+親機:
 - Action ID解釈
-- Action IDから対象家族解決
-- 表示名解決
-- Webメッセージ取得・`{target}` 展開
-- 現在状態更新
+- 対象家族解決
+- 状態変更適用
+- Webメッセージ取得・展開
 - Web表示
 - 通知設定評価
 
-この責務を混在させない。
+Web UIはGPIO番号やInput Eventを解釈しない。
 
----
-
-## 8. 関連仕様
-
+## 7. 関連仕様
 - `docs/home_yuru_communication_design.md`
 - `docs/parent-overview-design.md`
 - `docs/parent-database-design.md`
