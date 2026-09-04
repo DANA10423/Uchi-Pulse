@@ -19,60 +19,58 @@
 
 ---
 
-## 3. HELLO
+## 3. HELLO / HEARTBEAT
 
-子機起動時等に親機へ存在を通知する。親機起動時は子機へHELLO送信を促すブロードキャストを行えるものとする。
+HELLOは子機起動時等の存在通知に使用する。HEARTBEATは生存確認に使用する。
 
-正常なHELLO受信は親機の通信状態をONLINEへ更新する根拠となる。
-
----
-
-## 4. HEARTBEAT
-
-子機の生存確認に使用する。
-
-正常なHEARTBEAT受信は親機の通信状態をONLINEへ更新する根拠となる。
+正常なHELLO / HEARTBEAT受信は親機の通信状態をONLINEへ更新する根拠となる。
 
 ---
 
-## 5. EVENT
+## 4. EVENT
 
-### 5.1 Action ID
+### 4.1 Action ID
 
 子機のGPIO入力から発生したEVENTでは、子機CDC設定に従ってAction IDを送信する。
 
 子機側の入力割当は次の3要素である。
 
 ```text
-GPIO + Edge + Action ID
+GPIO + Input Event + Action ID
 ```
 
-`Edge` は `OFF_TO_ON` / `ON_TO_OFF` のいずれかとする。
+Input Eventの初期定義:
 
-GPIOおよびEdgeは子機がAction IDを選択するための入力設定であり、Action IDの意味定義そのものではない。
+- `OFF_TO_ON`
+- `ON_TO_OFF`
+- `CLICK`
+- `DOUBLE_CLICK`
+- `LONG_PRESS`
+
+Input Eventの検出・判定は子機側入力処理で行う。GPIO番号およびInput EventはAction IDを選択するための子機ローカル設定であり、UDP EVENTには含めない。
 
 子機はAction IDの意味、対象家族、Web表示メッセージ、通知先を解釈しない。
 
-親機は受信したAction IDを親機DBのAction定義と照合し、状態変更・Web表示・通知判断を行う。
-
-### 5.2 EVENT概念形式
+### 4.2 EVENT形式
 
 ```json
 {
   "type": "EVENT",
   "device_id": "node-01",
   "event_id": "...",
-  "action_id": 1
+  "action_id": 10
 }
 ```
 
-`event_id` はEVENTの重複排除・ACK対応に使用するEVENT識別情報とする。具体的なID生成方式は実装詳細で定義する。
+`event_id` はEVENTの重複排除・ACK対応に使用するEVENT識別情報とする。
 
-### 5.3 EVENT処理
+### 4.3 EVENT処理
 
 ```text
 [子機]
-GPIOエッジ検出
+GPIO監視
+  ↓
+Input Event判定
   ↓
 Action ID取得
   ↓
@@ -91,34 +89,26 @@ Action ID解釈
   ↓
 現在状態更新
   ↓
-Web表示
-  ↓
-通知設定評価
-  ↓
-必要な場合のみ通知機能へ通知要求
+Web表示・通知設定評価
 ```
+
+UDP層は `CLICK` / `DOUBLE_CLICK` / `LONG_PRESS` 等の判定ロジックを持たない。
 
 ---
 
-## 6. ACK
+## 5. ACK
 
 EVENTに対するACKはできるだけ単純な形式とする。
-
-ACKは対象EVENTの識別情報を返し、子機がどのEVENTに対するACKか判定できるようにする。
 
 同一EVENTを再受信した場合、親機はイベント履歴およびAction処理を二重実行しないが、子機が再送を停止できるようACKは返す。
 
 ---
 
-## 7. 通信状態
+## 6. 通信状態
 
 HELLO、HEARTBEAT、EVENT等の正常なUDPメッセージを受信した場合、親機は対象子機をONLINEとして扱う。
 
-親機起動直後の登録済み子機は、通信確認前は `INITIAL_WAIT`（未確認）として扱う。
-
-`INITIAL_WAIT` のままオフライン判定時間を超えた場合は `OFFLINE` へ遷移する。
-
-一度OFFLINEになった子機でも正常なメッセージを受信すればONLINEへ復帰する。
+親機起動直後の登録済み子機は `INITIAL_WAIT` とし、オフライン判定時間超過で `OFFLINE` へ遷移する。OFFLINE後も正常受信でONLINEへ復帰する。
 
 ```text
 INITIAL_WAIT --正常受信--> ONLINE
@@ -129,25 +119,15 @@ OFFLINE      --正常受信--> ONLINE
 
 ---
 
-## 8. Action定義との境界
+## 7. Action定義との境界
 
 本UDP仕様はAction IDを転送するが、Actionの意味は定義しない。
 
-Action定義は親機側で管理し、初期Actionとして以下を使用する。
-
-- ご飯通知
-- ご飯通知クリア
-- 入室OK
-- 入室NG
-- 会議中
-- ポスト投函
-- ポスト投函解除
-
-詳細は `docs/home_yuru_communication_design.md` および `docs/parent-database-design.md` を参照する。
+Action定義の詳細は `docs/home_yuru_communication_design.md` および `docs/parent-database-design.md` を参照する。
 
 ---
 
-## 9. 関連仕様
+## 8. 関連仕様
 
 - `docs/cdc_communication_spec.md`
 - `docs/home_yuru_communication_design.md`
