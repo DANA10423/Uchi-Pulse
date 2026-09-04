@@ -15,10 +15,11 @@ Web表示は親機が管理する情報を使用する。子機はWeb表示メ�
 | デバイス名・分類 | 親機DB `devices` |
 | 家族表示名 | 親機DB `families.display_name` |
 | Action表示メッセージ | 親機DB `actions.web_message` |
+| Action対象家族 | 親機DB `actions.target_family_id` |
 | 通信状態 | 親機メモリ `DeviceState` |
 | 入室可否 | 親機メモリ `DeviceState.room_access_status` |
 
-Actionの対象者名を子機EVENTに表示文字列として持たせず、親機がFamily IDから表示名を解決する。
+Actionの対象者名を子機EVENTに表示文字列として持たせず、親機がAction IDから `target_family_id` を取得し、家族マスタから表示名を解決する。
 
 ---
 
@@ -58,7 +59,8 @@ Web UIは子機から受信したAction IDを直接表示用文字列として�
   Action ID
       ↓
 親機Action定義
-  ├─ 対象家族
+  ├─ target_type
+  ├─ target_family_id
   └─ web_message
       ↓
 Web表示
@@ -68,11 +70,13 @@ Web表示
 
 ## 5. 対象者表示
 
-家族対象Actionでは `target_family_id` から家族マスタを参照し、`display_name` を表示に使用する。
+`FAMILY` Actionでは、Action IDごとに1つの `target_family_id` が登録されている。親機はその `target_family_id` から家族マスタを参照し、`display_name` を表示に使用する。
 
-ポスト投函等の共通対象Actionでは対象家族を持たないため、家族名を付加しない。
+同じAction内容でも対象家族が異なる場合は別Action IDである。そのためWeb表示処理は送信元 `device_id` から対象家族を推測しない。
 
-対象家族が必要かどうかはAction種別によって親機側で判定する。
+`COMMON` Actionでは `target_family_id` を持たないため、家族名を付加しない。
+
+`web_message` 内の `{target}` はFAMILY Actionの場合に対象家族の `display_name` で展開する。
 
 ---
 
@@ -91,16 +95,16 @@ Actionの `web_message` はWeb表示に使用する。スマートフォンへ�
 子機:
 
 - GPIO監視
-- OFF→ON / ON→OFF検出
+- `OFF_TO_ON` / `ON_TO_OFF` 検出
 - Action ID発生
 - UDP EVENT送信
 
 親機:
 
 - Action ID解釈
-- 対象家族解決
+- Action IDから対象家族解決
 - 表示名解決
-- Webメッセージ取得
+- Webメッセージ取得・`{target}` 展開
 - 現在状態更新
 - Web表示
 - 通知設定評価
