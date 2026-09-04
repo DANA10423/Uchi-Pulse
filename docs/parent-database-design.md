@@ -79,17 +79,28 @@ Actionは状態を必ず変更するものとは限定しない。1つのAction�
 |---|---|---|---|
 | `action_id` | INTEGER PK | NO | 子機から通知される一意のAction ID |
 | `action_name` | TEXT | NO | 管理・表示用名称 |
-| `target_type` | TEXT | NO | `FAMILY` / `COMMON` |
+| `target_type` | TEXT | NO | `FAMILY` / `ALL_FAMILIES` / `COMMON` |
 | `target_family_id` | INTEGER FK | YES | FAMILYの場合の対象家族 |
 | `web_message` | TEXT | YES | Web表示メッセージ。不要なActionではNULL可 |
 | `enabled` | INTEGER | NO | 1=有効、0=無効 |
 
 `state_type` / `state_value` は `actions` から分離し、`action_state_changes` で管理する。
 
-- `FAMILY`: 家族対象。`target_family_id` 必須。
-- `COMMON`: 共通対象。`target_family_id` はNULL。
+- `FAMILY`: 特定家族1人を対象とする。`target_family_id` 必須。
+- `ALL_FAMILIES`: Action実行時点で `families.enabled = 1` の家族全員を対象とする。`target_family_id` はNULL。
+- `COMMON`: 家族に属さない共通状態を対象とする。`target_family_id` はNULL。
 - FAMILY Actionは対象家族ごとに別Action IDを登録する。
+- ALL_FAMILIES Actionは1つのAction IDで有効家族全員を対象にする。
+- ALL_FAMILIESは対象家族ID一覧を保存しない。実行時に `families` から対象を解決する。
 - 親機は送信元 `device_id` から対象家族を推測しない。
+
+`target_type` と `target_family_id` の組み合わせは次のとおり検証する。
+
+| target_type | target_family_id |
+|---|---|
+| `FAMILY` | NOT NULL。存在する家族を参照する |
+| `ALL_FAMILIES` | NULL |
+| `COMMON` | NULL |
 
 ---
 
@@ -108,8 +119,11 @@ Actionは状態を必ず変更するものとは限定しない。1つのAction�
 例:
 
 ```text
-ご飯通知
-  └─ MEAL_NOTICE = ON
+ご飯通知（FAMILY）
+  └─ 対象家族1人へ MEAL_NOTICE = ON
+
+全員へご飯通知（ALL_FAMILIES）
+  └─ 有効家族全員へ MEAL_NOTICE = ON
 
 食事通知クリア
   ├─ MEAL_NOTICE = OFF
@@ -119,7 +133,7 @@ Actionは状態を必ず変更するものとは限定しない。1つのAction�
   └─ 状態変更なし
 ```
 
-これにより、単一状態変更、複数状態変更、状態変更なしのActionを同じモデルで扱う。
+これにより、単一状態変更、複数状態変更、全員対象、状態変更なしのActionを同じモデルで扱う。
 
 ---
 
@@ -129,20 +143,20 @@ Actionは状態を必ず変更するものとは限定しない。1つのAction�
 
 | Action | target_type | 状態変更 | デフォルトWebメッセージ |
 |---|---|---|---|
-| ご飯通知 | `FAMILY` | `MEAL_NOTICE=ON` | `{target}：ご飯です` |
-| ご飯通知クリア | `FAMILY` | `MEAL_NOTICE=OFF` | `{target}：ご飯通知を解除しました` |
-| おやつ通知 | `FAMILY` | `SNACK_NOTICE=ON` | `{target}：おやつです` |
-| おやつ通知クリア | `FAMILY` | `SNACK_NOTICE=OFF` | `{target}：おやつ通知を解除しました` |
-| 食事通知クリア | `FAMILY` | `MEAL_NOTICE=OFF`, `SNACK_NOTICE=OFF` | `{target}：食事通知を解除しました` |
-| HELP通知 | `FAMILY` | `HELP_NOTICE=ON` | `{target}：HELPです` |
-| HELP通知クリア | `FAMILY` | `HELP_NOTICE=OFF` | `{target}：HELP通知を解除しました` |
+| ご飯通知 | `FAMILY` / `ALL_FAMILIES` | `MEAL_NOTICE=ON` | `{target}：ご飯です` |
+| ご飯通知クリア | `FAMILY` / `ALL_FAMILIES` | `MEAL_NOTICE=OFF` | `{target}：ご飯通知を解除しました` |
+| おやつ通知 | `FAMILY` / `ALL_FAMILIES` | `SNACK_NOTICE=ON` | `{target}：おやつです` |
+| おやつ通知クリア | `FAMILY` / `ALL_FAMILIES` | `SNACK_NOTICE=OFF` | `{target}：おやつ通知を解除しました` |
+| 食事通知クリア | `FAMILY` / `ALL_FAMILIES` | `MEAL_NOTICE=OFF`, `SNACK_NOTICE=OFF` | `{target}：食事通知を解除しました` |
+| HELP通知 | `FAMILY` / `ALL_FAMILIES` | `HELP_NOTICE=ON` | `{target}：HELPです` |
+| HELP通知クリア | `FAMILY` / `ALL_FAMILIES` | `HELP_NOTICE=OFF` | `{target}：HELP通知を解除しました` |
 | 入室OK | `FAMILY` | `ENTRY_PERMISSION=OK` | `{target}：入室OK` |
 | 入室NG | `FAMILY` | `ENTRY_PERMISSION=NG` | `{target}：入室NG` |
 | 会議中 | `FAMILY` | `ENTRY_PERMISSION=MEETING` | `{target}：会議中` |
 | ポスト投函 | `COMMON` | `MAILBOX=ON` | `ポストに投函がありました` |
 | ポスト投函解除 | `COMMON` | `MAILBOX=OFF` | `ポストの投函状態を解除しました` |
 
-FAMILYの10種類は必要な家族ごとにActionを作成する。COMMONの2種類は対象家族を持たない。
+`FAMILY` は必要な家族ごとにActionを作成する。`ALL_FAMILIES` は同じ基本Actionを1つのAction IDで有効家族全員へ適用したい場合に使用する。`COMMON` は対象家族を持たない。
 
 ---
 
@@ -189,7 +203,7 @@ Action: 父へ「少し話したい」
 | `notification_enabled` | INTEGER | NO | 1=通知、0=通知しない |
 | `notification_message` | TEXT | YES | Action固有の通知メッセージ |
 
-`notification_message` はActionごとに設定可能とする。`{target}` を含む場合は `families.display_name` で展開できる。
+`notification_message` はActionごとに設定可能とする。`{target}` を含む場合は対象家族の表示名等へ展開できる。`ALL_FAMILIES` のWeb表示・通知文言で `{target}` を利用する場合の表現はUI/通知仕様側で定義する。
 
 ### 10.2 action_notification_targets
 
@@ -199,6 +213,8 @@ Action: 父へ「少し話したい」
 | `family_id` | INTEGER FK | NO | 通知先家族 |
 
 主キーは `(action_id, family_id)` とする。Action対象家族と通知先家族は別概念であり、通知先は複数設定できる。
+
+`ALL_FAMILIES` は状態変更等のAction対象を意味し、通知先全員を意味しない。通知先は常に `action_notification_targets` から独立して解決する。
 
 ---
 
@@ -241,12 +257,18 @@ Action ID取得
         ↓
     actions取得
         ↓
-    enabled / target確認
+    enabled / target_type / target_family_id確認
+        ↓
+    対象解決
+        ├─ FAMILY       → target_family_id の家族1人
+        ├─ ALL_FAMILIES → families.enabled = 1 の家族全員
+        └─ COMMON       → 家族対象なし
+        ↓
     action_state_changes全件取得・検証
         ↓
     eventsへ履歴保存
         ↓
-    検証済み状態変更を0..n件適用
+    検証済み状態変更を対象へ0..n件適用
     ↓
 定義された状態をメモリへ反映
     ↓
@@ -261,6 +283,8 @@ Web表示が定義されていれば表示情報へ反映
 
 存在しないAction、無効化されたAction、または`target_type`と`target_family_id`の組み合わせが不正なActionは、EVENT履歴へ保存せず、状態更新およびACK送信を行わない。
 
+`ALL_FAMILIES` で有効家族が0人の場合は、Action自体は有効な定義として扱うが、家族単位の状態変更対象は0件となる。EVENT履歴・ACKの扱いは通常の有効Actionと同じとする。
+
 Actionの事前検証とEVENT履歴保存が完了した後のAction内部処理失敗は、EVENT再送によるAction再実行を行わないためACKを返す。内部失敗は親機内で記録・処理する。
 
 ---
@@ -274,7 +298,7 @@ Actionの事前検証とEVENT履歴保存が完了した後のAction内部処理
 - `SNACK_NOTICE`: `ON` / `OFF`
 - `HELP_NOTICE`: `ON` / `OFF`
 
-食事通知クリアでは `MEAL_NOTICE` と `SNACK_NOTICE` を同時に `OFF` にする。
+食事通知クリアでは `MEAL_NOTICE` と `SNACK_NOTICE` を同時に `OFF` にする。`ALL_FAMILIES` の場合は有効家族全員へ適用する。
 
 ---
 
@@ -283,7 +307,10 @@ Actionの事前検証とEVENT履歴保存が完了した後のAction内部処理
 - Actionと状態変更を分離する。
 - 1 Actionは0..n件の状態変更を持てる。
 - 状態変更なしの通知専用Actionを許容する。
+- `FAMILY` / `ALL_FAMILIES` / `COMMON` の3種類の対象種別を持つ。
 - FAMILY Actionは対象家族ごとに別Action IDを持つ。
+- ALL_FAMILIES Actionは1 Action IDで実行時点の有効家族全員を対象とする。
+- ALL_FAMILIESでは対象家族一覧をDBへ固定保存しない。
 - Action対象家族と通知先家族を別概念として扱う。
 - 通知先は複数設定できる。
 - 通知メッセージはActionごとに設定できる。
