@@ -425,32 +425,110 @@ mod firmware {
 
         let inputs = InputSet {
             pins: [
-                GpioInputPin { gpio: 0, input: Input::new(p.PIN_0, Pull::Up) },
-                GpioInputPin { gpio: 1, input: Input::new(p.PIN_1, Pull::Up) },
-                GpioInputPin { gpio: 2, input: Input::new(p.PIN_2, Pull::Up) },
-                GpioInputPin { gpio: 3, input: Input::new(p.PIN_3, Pull::Up) },
-                GpioInputPin { gpio: 4, input: Input::new(p.PIN_4, Pull::Up) },
-                GpioInputPin { gpio: 5, input: Input::new(p.PIN_5, Pull::Up) },
-                GpioInputPin { gpio: 6, input: Input::new(p.PIN_6, Pull::Up) },
-                GpioInputPin { gpio: 7, input: Input::new(p.PIN_7, Pull::Up) },
-                GpioInputPin { gpio: 8, input: Input::new(p.PIN_8, Pull::Up) },
-                GpioInputPin { gpio: 9, input: Input::new(p.PIN_9, Pull::Up) },
-                GpioInputPin { gpio: 10, input: Input::new(p.PIN_10, Pull::Up) },
-                GpioInputPin { gpio: 11, input: Input::new(p.PIN_11, Pull::Up) },
-                GpioInputPin { gpio: 12, input: Input::new(p.PIN_12, Pull::Up) },
-                GpioInputPin { gpio: 13, input: Input::new(p.PIN_13, Pull::Up) },
-                GpioInputPin { gpio: 14, input: Input::new(p.PIN_14, Pull::Up) },
-                GpioInputPin { gpio: 15, input: Input::new(p.PIN_15, Pull::Up) },
-                GpioInputPin { gpio: 16, input: Input::new(p.PIN_16, Pull::Up) },
-                GpioInputPin { gpio: 17, input: Input::new(p.PIN_17, Pull::Up) },
-                GpioInputPin { gpio: 18, input: Input::new(p.PIN_18, Pull::Up) },
-                GpioInputPin { gpio: 19, input: Input::new(p.PIN_19, Pull::Up) },
-                GpioInputPin { gpio: 20, input: Input::new(p.PIN_20, Pull::Up) },
-                GpioInputPin { gpio: 21, input: Input::new(p.PIN_21, Pull::Up) },
-                GpioInputPin { gpio: 22, input: Input::new(p.PIN_22, Pull::Up) },
-                GpioInputPin { gpio: 26, input: Input::new(p.PIN_26, Pull::Up) },
-                GpioInputPin { gpio: 27, input: Input::new(p.PIN_27, Pull::Up) },
-                GpioInputPin { gpio: 28, input: Input::new(p.PIN_28, Pull::Up) },
+                GpioInputPin {
+                    gpio: 0,
+                    input: Input::new(p.PIN_0, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 1,
+                    input: Input::new(p.PIN_1, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 2,
+                    input: Input::new(p.PIN_2, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 3,
+                    input: Input::new(p.PIN_3, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 4,
+                    input: Input::new(p.PIN_4, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 5,
+                    input: Input::new(p.PIN_5, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 6,
+                    input: Input::new(p.PIN_6, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 7,
+                    input: Input::new(p.PIN_7, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 8,
+                    input: Input::new(p.PIN_8, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 9,
+                    input: Input::new(p.PIN_9, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 10,
+                    input: Input::new(p.PIN_10, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 11,
+                    input: Input::new(p.PIN_11, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 12,
+                    input: Input::new(p.PIN_12, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 13,
+                    input: Input::new(p.PIN_13, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 14,
+                    input: Input::new(p.PIN_14, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 15,
+                    input: Input::new(p.PIN_15, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 16,
+                    input: Input::new(p.PIN_16, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 17,
+                    input: Input::new(p.PIN_17, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 18,
+                    input: Input::new(p.PIN_18, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 19,
+                    input: Input::new(p.PIN_19, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 20,
+                    input: Input::new(p.PIN_20, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 21,
+                    input: Input::new(p.PIN_21, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 22,
+                    input: Input::new(p.PIN_22, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 26,
+                    input: Input::new(p.PIN_26, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 27,
+                    input: Input::new(p.PIN_27, Pull::Up),
+                },
+                GpioInputPin {
+                    gpio: 28,
+                    input: Input::new(p.PIN_28, Pull::Up),
+                },
             ],
         };
         spawner.spawn(input_task(inputs, runtime_config).unwrap());

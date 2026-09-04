@@ -391,8 +391,10 @@ impl eframe::App for ControlApp {
         });
 
         egui::Panel::left("commands")
-            .resizable(false)
+            .resizable(true)
             .default_size(150.0)
+            .min_size(120.0)
+            .max_size(320.0)
             .show(ui, |ui| {
                 ui.heading("コマンド");
                 ui.add_space(8.0);
@@ -430,26 +432,42 @@ impl eframe::App for ControlApp {
                 }
             });
 
+        let editor_max_height = (ui.available_height() - 160.0).max(180.0);
+        egui::Panel::top("configuration_editor")
+            .resizable(true)
+            .show_separator_line(true)
+            .default_size(360.0)
+            .min_size(180.0)
+            .max_size(editor_max_height)
+            .show(ui, |ui| {
+                ui.heading(format!("{}設定", self.endpoint.label()));
+                ui.label(format!(
+                    "設定取得で{}の現在値を読み込み、JSONを編集して設定保存できます。",
+                    self.endpoint.label()
+                ));
+                ui.add_space(6.0);
+                ui.group(|ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("config_editor")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.add(
+                                TextEdit::multiline(&mut self.config_text)
+                                    .frame(egui::Frame::NONE)
+                                    .font(TextStyle::Monospace)
+                                    .desired_rows(16)
+                                    .desired_width(f32::INFINITY),
+                            );
+                        });
+                });
+            });
+
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.heading(format!("{}設定", self.endpoint.label()));
-            ui.label(format!(
-                "設定取得で{}の現在値を読み込み、JSONを編集して設定保存できます。",
-                self.endpoint.label()
-            ));
-            ui.add_space(6.0);
-            ui.add(
-                TextEdit::multiline(&mut self.config_text)
-                    .font(TextStyle::Monospace)
-                    .desired_rows(16)
-                    .desired_width(f32::INFINITY),
-            );
-            ui.add_space(10.0);
-            ui.separator();
             ui.heading("通信ログ");
             egui::ScrollArea::vertical()
+                .id_salt("communication_log")
                 .auto_shrink([false, false])
                 .stick_to_bottom(true)
-                .max_height(260.0)
                 .show(ui, |ui| {
                     for entry in &self.log {
                         let color = match entry.direction {
