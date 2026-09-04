@@ -83,7 +83,7 @@ Actionには表示名文字列を直接保存せず `family_id` を参照する�
 
 | 項目 | 型 | NULL | 内容 |
 |---|---|---|---|
-| `action_id` | INTEGER PK | NO | Action ID |
+| `action_id` | INTEGER PK | NO | 子機から通知される一意のAction ID |
 | `action_name` | TEXT | NO | 管理・表示用名称 |
 | `target_type` | TEXT | NO | `FAMILY` / `COMMON` |
 | `target_family_id` | INTEGER FK | YES | FAMILYの場合の対象家族 |
@@ -92,34 +92,49 @@ Actionには表示名文字列を直接保存せず `family_id` を参照する�
 | `state_value` | TEXT | NO | 設定する状態値 |
 | `enabled` | INTEGER | NO | 1=有効、0=無効 |
 
-Actionの対象範囲は `target_type` で表現する。対象範囲だけを表す曖昧な `action_type` は使用しない。
-
 ### 6.2 target_type
 
 - `FAMILY`: 家族対象。`target_family_id` 必須。
 - `COMMON`: 共通対象。`target_family_id` はNULL。
 
-初期Actionではポスト投函系のみ `COMMON`、その他はすべて `FAMILY` とする。
+ポスト投函系のみ `COMMON` とし、それ以外の基本Actionパターンは `FAMILY` とする。
 
-### 6.3 初期Action定義
+### 6.3 FAMILY Actionの登録方式
 
-Action ID 1〜7は固定値として予約し、既存IDの意味を後から変更しない。追加Actionは8以降を使用する。
+FAMILY Actionは対象家族ごとに別Action IDを登録する。
 
-| ID | Action | target_type | state_type | state_value | デフォルト `web_message` |
-|---:|---|---|---|---|---|
-| 1 | ご飯通知 | `FAMILY` | `MEAL_NOTICE` | `ON` | `{target}：ご飯です` |
-| 2 | ご飯通知クリア | `FAMILY` | `MEAL_NOTICE` | `OFF` | `{target}：ご飯通知を解除しました` |
-| 3 | 入室OK | `FAMILY` | `ENTRY_PERMISSION` | `OK` | `{target}：入室OK` |
-| 4 | 入室NG | `FAMILY` | `ENTRY_PERMISSION` | `NG` | `{target}：入室NG` |
-| 5 | 会議中 | `FAMILY` | `ENTRY_PERMISSION` | `MEETING` | `{target}：会議中` |
-| 6 | ポスト投函 | `COMMON` | `MAILBOX` | `ON` | `ポストに投函がありました` |
-| 7 | ポスト投函解除 | `COMMON` | `MAILBOX` | `OFF` | `ポストの投函状態を解除しました` |
+```text
+Action ID 4 = 父 / 入室NG
+Action ID 5 = 母 / 入室NG
+```
 
-会議中の解除専用Actionは設けず、入室OKで状態を変更する。
+設計ルール:
+
+- 1つのAction IDが持つ `target_family_id` は最大1件。
+- 同じAction内容でも対象家族が異なれば別Action IDとする。
+- Action ID数が家族数に応じて増えることを許容する。
+- 親機は送信元 `device_id` から対象家族を推測しない。
+- EVENTの `action_id` から取得したActionレコードの `target_family_id` を対象者として使用する。
+
+### 6.4 基本Actionパターン
+
+初期版では以下7種類を基本パターンとして定義する。これらは固定Action IDではない。
+
+| Action | target_type | state_type | state_value | デフォルト `web_message` |
+|---|---|---|---|---|
+| ご飯通知 | `FAMILY` | `MEAL_NOTICE` | `ON` | `{target}：ご飯です` |
+| ご飯通知クリア | `FAMILY` | `MEAL_NOTICE` | `OFF` | `{target}：ご飯通知を解除しました` |
+| 入室OK | `FAMILY` | `ENTRY_PERMISSION` | `OK` | `{target}：入室OK` |
+| 入室NG | `FAMILY` | `ENTRY_PERMISSION` | `NG` | `{target}：入室NG` |
+| 会議中 | `FAMILY` | `ENTRY_PERMISSION` | `MEETING` | `{target}：会議中` |
+| ポスト投函 | `COMMON` | `MAILBOX` | `ON` | `ポストに投函がありました` |
+| ポスト投函解除 | `COMMON` | `MAILBOX` | `OFF` | `ポストの投函状態を解除しました` |
+
+FAMILYの5種類は必要な家族ごとにActionレコードを登録する。COMMONの2種類は `target_family_id = NULL` とする。
+
+会議中の解除専用Actionは設けず、対象家族の入室OK Actionで状態を変更する。
 
 `{target}` は `target_family_id` に対応する `families.display_name` で親機が展開する。
-
-FAMILY Actionは対象家族を伴うAction定義として登録する。COMMON Action 6・7では `target_family_id = NULL` とする。
 
 ---
 
@@ -182,14 +197,16 @@ UDP EVENT受信
     ↓
 Action ID取得
     ↓
-actions参照
+actionsをaction_idで1件取得
     ├─ target_type
-    ├─ 対象家族
-    ├─ Web表示メッセージ
+    ├─ target_family_id
+    ├─ web_message
     ├─ state_type
     └─ state_value
     ↓
-FAMILYの場合は対象家族を検証し {target} を表示名で展開
+FAMILYの場合はtarget_family_idを対象者として使用
+    ↓
+{target} を家族表示名で展開
     ↓
 eventsへ履歴保存
     ↓
@@ -231,9 +248,10 @@ OFFLINE      --正常受信--> ONLINE
 
 - 子機のGPIO・Edge・Action ID割当と親機のAction定義を混在させない。
 - 子機はAction IDの意味を解釈しない。
-- Action ID 1〜7を初期固定IDとする。
-- Actionの対象範囲は `target_type` (`FAMILY` / `COMMON`) で管理する。
-- ポスト投函系のみCOMMON、その他の初期ActionはFAMILYとする。
+- 7種類は基本Actionパターンであり固定Action IDではない。
+- FAMILY Actionは対象家族ごとに別Action IDを持つ。
+- 1つのAction IDには対象家族を最大1人だけ持たせる。
+- 親機はAction IDから対象家族を直接解決し、device_idから対象者を推測しない。
 - Web表示メッセージはAction定義に持ち、`{target}` を家族表示名で展開できる。
 - スマートフォン通知設定はAction定義から分離する。
 - Action対象家族と通知先家族を別概念として扱う。
