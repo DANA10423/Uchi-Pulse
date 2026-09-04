@@ -81,7 +81,7 @@
 | `edge` | `OFF_TO_ON` / `ON_TO_OFF` |
 | `action_id` | 発生させるAction ID |
 
-同じGPIOについてOFF→ONとON→OFFに別のAction IDを設定できる。
+同じGPIOについて `OFF_TO_ON` と `ON_TO_OFF` に別のAction IDを設定できる。
 
 概念例:
 
@@ -134,11 +134,11 @@ Web表示メッセージにはデフォルト値を用意し、親機CDCで変�
 
 対象者の表示名はActionに直接保存せず、家族マスタで管理する。
 
-- Family ID
-- 表示名
-- 有効／無効
+- `family_id`
+- `display_name`
+- `enabled`
 
-Actionは必要に応じてFamily IDを参照する。
+Actionは必要に応じて `target_family_id` で家族マスタを参照する。
 
 ### 6.4 通知設定
 
@@ -146,7 +146,7 @@ Actionは必要に応じてFamily IDを参照する。
 
 - 対象Action ID
 - 通知有無
-- 通知先Family ID
+- 通知先 `family_id`
 
 Actionの対象家族とスマートフォン通知先家族は別概念とする。
 
@@ -171,7 +171,7 @@ Action ID
       ↓
 Action定義
  + Action種別
- + 対象家族
+ + 対象家族（必要な種別のみ）
  + Web表示
  + 状態変更
       ↓
@@ -207,7 +207,7 @@ Action定義
 - `OPERATION_FAILED`
 - `NOT_SUPPORTED`
 
-親機ではAction種別と対象家族の整合性等も設定検証対象とする。子機ではGPIO番号、edge、Action IDの形式等を検証対象とする。
+親機ではAction種別と対象家族の整合性等も設定検証対象とする。子機ではGPIO番号、`edge`、Action IDの形式等を検証対象とする。
 
 ---
 
