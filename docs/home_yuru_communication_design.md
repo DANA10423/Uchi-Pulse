@@ -2,213 +2,183 @@
 
 ## 1. 文書概要
 
-本システムは、家庭内で発生する簡単な連絡・状態共有を物理入力中心の簡単な操作で行う「家庭内ゆるコミュニケーションツール」である。
+Uchi-Pulseは、家庭内で発生する簡単な連絡・状態共有を物理入力中心の簡単な操作で行う「家庭内ゆるコミュニケーションツール」である。
 
 - 子機: Raspberry Pi Pico W / Pico 2 W
 - 親機: Raspberry Pi Zero W / Zero 2 W
 - 通常通信: 家庭内Wi-Fi / UDP
 - 設定・保守: USB CDC
 
-子機はAction IDの意味を解釈せず、親機がAction IDを解釈して対象者、状態変更、Web表示、通知を管理する。
+子機はAction IDの意味を解釈せず、親機がAction IDから対象者、状態変更、Web表示、通知を解釈する。
 
 ---
 
 ## 2. 子機設計
 
-### 2.1 入力イベント
+GPIO入力から `OFF_TO_ON` / `ON_TO_OFF` / `CLICK` / `DOUBLE_CLICK` / `LONG_PRESS` のInput Eventを生成し、`GPIO + Input Event + Action ID` の設定に従ってAction IDをUDP EVENTで送信する。
 
-ボタン、スイッチ、ポスト投函検出センサー等を機能別に区別せずGPIO入力として扱う。
+操作判定設定:
 
-GPIO入力から生成するイベントを `Input Event` と呼ぶ。初期版では以下を扱う。
+| 設定項目 | デフォルト |
+|---|---:|
+| `double_click_interval_ms` | 400 ms |
+| `long_press_threshold_ms` | 1000 ms |
 
-- `OFF_TO_ON`
-- `ON_TO_OFF`
-- `CLICK`
-- `DOUBLE_CLICK`
-- `LONG_PRESS`
-
-`OFF_TO_ON` / `ON_TO_OFF` はGPIOの状態変化そのものを表す。
-
-`CLICK` / `DOUBLE_CLICK` / `LONG_PRESS` はボタン操作を子機側で判定して生成する論理イベントである。
-
-各GPIOの各Input Eventに独立してAction IDを割り当てられる。
-
-操作判定時間は子機設定として保持する。
-
-| 設定項目 | デフォルト | 内容 |
-|---|---:|---|
-| `double_click_interval_ms` | 400 ms | 1回目のクリック後、2回目のクリックを待つ時間 |
-| `long_press_threshold_ms` | 1000 ms | 押下継続を長押しと判定する時間 |
-
-両設定値はUSB CDCの `get_config` / `set_config` で取得・変更可能とし、永続保存する。
-
-`CLICK` は、1回目のクリック後 `double_click_interval_ms` 内に2回目が成立しなかった時点で確定する。2回目が成立した場合は `DOUBLE_CLICK` とし、同一操作から `CLICK` と `DOUBLE_CLICK` を重複発生させない。
-
-`LONG_PRESS` は押下状態が `long_press_threshold_ms` 以上継続した場合に成立する。
-
-### 2.2 子機CDC設定
-
-Action入力割当:
-
-| 項目 | 内容 |
-|---|---|
-| `gpio` | 監視対象GPIO番号 |
-| `input_event` | `OFF_TO_ON` / `ON_TO_OFF` / `CLICK` / `DOUBLE_CLICK` / `LONG_PRESS` |
-| `action_id` | 発生時に送信するAction ID |
-
-例:
-
-```text
-GPIO 5 / CLICK        / Action ID 10
-GPIO 5 / DOUBLE_CLICK / Action ID 11
-GPIO 5 / LONG_PRESS   / Action ID 12
-GPIO 8 / OFF_TO_ON    / Action ID 20
-GPIO 8 / ON_TO_OFF    / Action ID 21
-```
-
-操作判定設定例:
-
-```json
-{
-  "double_click_interval_ms": 400,
-  "long_press_threshold_ms": 1000
-}
-```
-
-子機はAction名、対象家族、Web表示メッセージ、状態変更内容、通知設定、LINE / Slack等の送信先を保持・解釈しない。
+両設定はUSB CDCで取得・変更・永続保存できる。
 
 ---
 
 ## 3. 親機Action設計
 
-### 3.1 Action定義
+### 3.1 Action本体
 
-親機DBのAction定義は以下を持つ。
+Action本体は以下を持つ。
 
 - `action_id`
 - `action_name`
 - `target_type`
 - `target_family_id`
-- `web_message`
-- `state_type`
-- `state_value`
+- `web_message`（任意）
 - `enabled`
 
-- `FAMILY`: 家族対象。`target_family_id` 必須。
-- `COMMON`: 共通対象。`target_family_id` はNULL。
+FAMILY Actionは対象家族ごとに別Action IDを登録する。COMMON Actionは対象家族を持たない。
 
-### 3.2 Action IDと対象家族
+### 3.2 状態変更の分離
 
-家族対象Actionは対象家族ごとに別Action IDを登録する。
+Actionは状態を必ず変更するものとはしない。状態変更を `action_state_changes` としてAction本体から分離し、1つのActionに0件以上の状態変更を定義できる。
 
-同じAction内容でも対象家族が異なる場合は別Actionとして扱う。
+```text
+Action
+  ├─ 対象家族 0..1
+  ├─ 状態変更 0..n
+  ├─ Web表示 任意
+  └─ スマートフォン通知 任意
+```
 
-1つのAction IDが持つ `target_family_id` は最大1件とする。
-
-親機は受信したAction IDからAction内容と対象家族を直接解決し、送信元 `device_id` からAction対象者を推測しない。
+これにより、通常Action、複数状態を変更するAction、通知専用Actionを同一モデルで扱う。
 
 ### 3.3 基本Actionパターン
 
-初期版では次の11種類を基本Actionパターンとして用意する。
+初期版では次の12種類を基本Actionパターンとする。
 
-| Action | target_type | state_type | state_value | デフォルトWebメッセージ |
-|---|---|---|---|---|
-| ご飯通知 | `FAMILY` | `MEAL_NOTICE` | `ON` | `{target}：ご飯です` |
-| ご飯通知クリア | `FAMILY` | `MEAL_NOTICE` | `OFF` | `{target}：ご飯通知を解除しました` |
-| おやつ通知 | `FAMILY` | `SNACK_NOTICE` | `ON` | `{target}：おやつです` |
-| おやつ通知クリア | `FAMILY` | `SNACK_NOTICE` | `OFF` | `{target}：おやつ通知を解除しました` |
-| HELP通知 | `FAMILY` | `HELP_NOTICE` | `ON` | `{target}：HELPです` |
-| HELP通知クリア | `FAMILY` | `HELP_NOTICE` | `OFF` | `{target}：HELP通知を解除しました` |
-| 入室OK | `FAMILY` | `ENTRY_PERMISSION` | `OK` | `{target}：入室OK` |
-| 入室NG | `FAMILY` | `ENTRY_PERMISSION` | `NG` | `{target}：入室NG` |
-| 会議中 | `FAMILY` | `ENTRY_PERMISSION` | `MEETING` | `{target}：会議中` |
-| ポスト投函 | `COMMON` | `MAILBOX` | `ON` | `ポストに投函がありました` |
-| ポスト投函解除 | `COMMON` | `MAILBOX` | `OFF` | `ポストの投函状態を解除しました` |
+| Action | target_type | 状態変更 |
+|---|---|---|
+| ご飯通知 | `FAMILY` | `MEAL_NOTICE=ON` |
+| ご飯通知クリア | `FAMILY` | `MEAL_NOTICE=OFF` |
+| おやつ通知 | `FAMILY` | `SNACK_NOTICE=ON` |
+| おやつ通知クリア | `FAMILY` | `SNACK_NOTICE=OFF` |
+| 食事通知クリア | `FAMILY` | `MEAL_NOTICE=OFF`, `SNACK_NOTICE=OFF` |
+| HELP通知 | `FAMILY` | `HELP_NOTICE=ON` |
+| HELP通知クリア | `FAMILY` | `HELP_NOTICE=OFF` |
+| 入室OK | `FAMILY` | `ENTRY_PERMISSION=OK` |
+| 入室NG | `FAMILY` | `ENTRY_PERMISSION=NG` |
+| 会議中 | `FAMILY` | `ENTRY_PERMISSION=MEETING` |
+| ポスト投函 | `COMMON` | `MAILBOX=ON` |
+| ポスト投函解除 | `COMMON` | `MAILBOX=OFF` |
 
-この11種類は固定Action IDではない。
+「食事通知クリア」は対象家族のご飯通知とおやつ通知を同時に解除する。
 
-FAMILYの9種類は必要な家族ごとにAction定義を作成する。COMMONの2種類は対象家族を持たない。
+---
 
-ご飯通知、おやつ通知、HELP通知はそれぞれ独立した状態として扱い、各クリアActionで `OFF` に変更する。
+## 4. 入室問い合わせAction
 
-「会議中」の解除専用Actionは設けず、対象家族の `入室OK` Actionを使用する。
+部屋の外にいる家族から、部屋にいる対象家族へ「入室してよいか」等を問い合わせる用途として、状態変更なしの通知専用Actionを作成できる。
 
-### 3.4 対象家族とメッセージ
+入室問い合わせActionの基本ルール:
 
-`FAMILY` Actionでは `target_family_id` を必須とし、家族マスタの `display_name` を参照する。
+- `target_type = FAMILY`
+- 対象家族ごとに別Action ID
+- 状態変更は0件
+- `ENTRY_PERMISSION` は変更しない
+- スマートフォン通知を有効化できる
+- 通知先家族は複数設定可能
+- 通知メッセージをActionごとに設定可能
+- 同一対象者に複数の問い合わせActionを作成可能
 
-`COMMON` Actionでは `target_family_id = NULL` とする。
+例:
 
-`web_message` 内の `{target}` は親機が対象家族の `display_name` で展開する。
+```text
+父への入室問い合わせ
+  状態変更: なし
+  通知先: 父
+  通知メッセージ: 今、部屋に入ってもいい？
 
-### 3.5 通知設定
+父へ少し話したい
+  状態変更: なし
+  通知先: 父
+  通知メッセージ: 少し話したいです
+```
 
-スマートフォン通知はAction定義から分離する。
+問い合わせを受けた対象家族が、自分の端末から `入室OK` / `入室NG` / `会議中` Actionを実行することで入室可否状態を変更する。
 
-- 対象Action ID
-- 通知有無
-- 通知先家族
+入室問い合わせは基本Actionパターンの固定種類として数を限定せず、必要な数だけ作成可能な通知専用Actionとして扱う。
+
+---
+
+## 5. 通知設計
 
 Actionの対象家族と通知先家族は別概念とする。
 
----
+通知設定はActionごとに以下を持つ。
 
-## 4. 子機・親機の責務境界
+- 通知有無
+- 通知メッセージ
+- 通知先家族 0..n
 
-| 情報・処理 | 子機 | 親機 |
-|---|---|---|
-| GPIO監視 | ○ | × |
-| Input Event生成 | ○ | × |
-| CLICK / DOUBLE_CLICK / LONG_PRESS判定 | ○ | × |
-| 操作判定時間の設定・保持 | ○ | × |
-| GPIO+Input EventへのAction ID割当 | ○ | × |
-| Action IDの意味解釈 | × | ○ |
-| `target_type` / 対象家族 | × | ○ |
-| Web表示メッセージ | × | ○ |
-| 状態変更 | × | ○ |
-| EVENT履歴 | × | ○ |
-| 通知有無・通知先家族 | × | ○ |
+通知メッセージはActionごとに設定可能とする。LINE / Slack等の実際の送信先は家族ごとの通知先設定から解決する。
+
+外部通知失敗はUDP ACK、EVENT履歴保存、状態変更に影響させない。
 
 ---
 
-## 5. 処理概要
+## 6. 処理概要
 
 ```text
 [子機]
 GPIO
-  ↓
-Input Event判定
-  ├─ OFF_TO_ON
-  ├─ ON_TO_OFF
-  ├─ CLICK
-  ├─ DOUBLE_CLICK
-  └─ LONG_PRESS
-  ↓
+ ↓
+Input Event
+ ↓
 Action ID
-  ↓ UDP EVENT
+ ↓ UDP EVENT
 
 ---------------- 責務境界 ----------------
 
 [親機]
 Action ID
-  ↓
-Action定義参照
-  ├─ target_type
-  ├─ target_family_id
-  ├─ web_message
-  ├─ state_type
-  └─ state_value
-  ↓
-履歴保存・メモリ状態更新・Web表示
-  ↓
-通知設定参照
-  ↓
-必要な場合は通知機能へ通知要求
+ ↓
+Action本体取得
+ ↓
+EVENT履歴保存
+ ↓
+状態変更 0..n件を実行
+ ↓
+Web表示（定義されている場合）
+ ↓
+通知設定評価
+ ↓
+通知メッセージ + 通知先家族
+ ↓
+LINE / Slack等の通知機能
 ```
 
 ---
 
-## 6. 関連仕様
+## 7. 設計原則
+
+- 子機はAction IDを不透明な識別子として扱う。
+- Actionの意味は親機で管理する。
+- FAMILY Actionは対象家族ごとに別Action IDを持つ。
+- Actionと状態変更を分離する。
+- 1 Actionは0..n件の状態変更を持つ。
+- 状態変更なしの通知専用Actionを許容する。
+- Action対象家族と通知先家族を分離する。
+- 通知メッセージはActionごとに設定できる。
+- 入室問い合わせActionは複数作成でき、入室可否状態を直接変更しない。
+
+---
+
+## 8. 関連仕様
 
 - `docs/cdc_communication_spec.md`
 - `docs/parent_child_udp_communication_spec.md`
