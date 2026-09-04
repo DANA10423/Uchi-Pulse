@@ -131,6 +131,16 @@ Uchi-PulseにおけるUSB CDC通信の共通仕様と、親機・子機それぞ
 - `web_message`（NULL可）
 - `enabled`
 
+`target_type` は次の3種類を使用する。
+
+| target_type | 意味 | target_family_id |
+|---|---|---|
+| `FAMILY` | 特定家族1人 | 必須 |
+| `ALL_FAMILIES` | Action実行時点の有効家族全員 | `NULL` |
+| `COMMON` | 家族に属さない共通状態 | `NULL` |
+
+`set_config` では `target_type` と `target_family_id` の組み合わせを検証する。`ALL_FAMILIES` の対象家族一覧は設定JSONへ保持せず、Action実行時に親機が `families.enabled = 1` から解決する。
+
 ### 5.2 Action状態変更
 状態変更はAction本体から分離し、`action_state_changes` として0..n件管理する。
 
@@ -138,7 +148,7 @@ Uchi-PulseにおけるUSB CDC通信の共通仕様と、親機・子機それぞ
 - `state_type`
 - `state_value`
 
-1 Actionで単一状態変更、複数状態変更、状態変更なしを扱える。
+1 Actionで単一状態変更、複数状態変更、全員対象状態変更、状態変更なしを扱える。
 
 ### 5.3 通知設定
 `action_notification_settings`:
@@ -148,7 +158,7 @@ Uchi-PulseにおけるUSB CDC通信の共通仕様と、親機・子機それぞ
 
 `action_notification_targets` により通知先家族を0..n件設定できる。
 
-Action対象家族と通知先家族は別概念とする。
+Action対象家族と通知先家族は別概念とする。`ALL_FAMILIES` を指定しても通知先を自動的に全員へ設定しない。
 
 ### 5.4 親機設定JSON
 親機の `get_config.data` および `set_config.params` は、次のオブジェクトとする。
@@ -156,12 +166,13 @@ Action対象家族と通知先家族は別概念とする。
 ```json
 {
   "families": [
-    { "family_id": 1, "display_name": "太郎", "enabled": true }
+    { "family_id": 1, "display_name": "太郎", "enabled": true },
+    { "family_id": 2, "display_name": "花子", "enabled": true }
   ],
   "actions": [
     {
       "action_id": 10,
-      "action_name": "ご飯通知",
+      "action_name": "太郎へご飯通知",
       "target_type": "FAMILY",
       "target_family_id": 1,
       "web_message": "ご飯です",
@@ -172,6 +183,20 @@ Action対象家族と通知先家族は別概念とする。
       "notification_enabled": false,
       "notification_message": null,
       "notification_targets": []
+    },
+    {
+      "action_id": 11,
+      "action_name": "全員へご飯通知",
+      "target_type": "ALL_FAMILIES",
+      "target_family_id": null,
+      "web_message": "ご飯です",
+      "enabled": true,
+      "state_changes": [
+        { "state_type": "MEAL_NOTICE", "state_value": "ON" }
+      ],
+      "notification_enabled": true,
+      "notification_message": "ご飯です",
+      "notification_targets": [1, 2]
     }
   ],
   "family_notification_destinations": [
@@ -185,8 +210,7 @@ Action対象家族と通知先家族は別概念とする。
 }
 ```
 
-`set_config`は、家族・Action・状態変更・通知設定・通知先を検証したうえで、親機の
-SQLiteへ保存する。イベント履歴および子機の通信状態は設定JSONに含めない。
+`set_config`は、家族・Action・対象種別・対象家族・状態変更・通知設定・通知先を検証したうえで、親機のSQLiteへ保存する。イベント履歴および子機の通信状態は設定JSONに含めない。
 
 ## 6. 設定反映
 `set_config` は設定値を検証して永続保存する。原則として設定変更は次回起動時に反映する。
@@ -217,11 +241,16 @@ Action ID
  ↓
 Action本体
  ↓
+target_type解決
+ ├─ FAMILY       → target_family_id の家族1人
+ ├─ ALL_FAMILIES → families.enabled = 1 の家族全員
+ └─ COMMON       → 家族対象なし
+ ↓
 action_state_changes 0..n
  ↓
 Web表示（任意）
  ↓
-通知設定（任意）
+通知設定（任意・Action対象とは独立）
 ```
 
 ## 9. 関連仕様
