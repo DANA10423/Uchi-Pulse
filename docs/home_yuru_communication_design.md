@@ -17,22 +17,41 @@
 
 ### 2.1 入力イベント
 
-ボタン、スイッチ、ポスト投函検出センサー等を機能別に区別せずGPIOデジタル入力として扱う。
+ボタン、スイッチ、ポスト投函検出センサー等を機能別に区別せずGPIO入力として扱う。
 
-Action発生条件は次のEdgeとする。
+GPIO入力から生成するイベントを `Input Event` と呼ぶ。初期版では以下を扱う。
 
 - `OFF_TO_ON`
 - `ON_TO_OFF`
+- `CLICK`
+- `DOUBLE_CLICK`
+- `LONG_PRESS`
 
-各GPIOの各Edgeに独立してAction IDを割り当てられる。
+`OFF_TO_ON` / `ON_TO_OFF` はGPIOの状態変化そのものを表す。
+
+`CLICK` / `DOUBLE_CLICK` / `LONG_PRESS` はボタン操作を子機側で判定して生成する論理イベントである。
+
+各GPIOの各Input Eventに独立してAction IDを割り当てられる。
+
+ダブルクリック判定時間と長押し判定時間は子機設定値として保持できる設計とし、具体的なデフォルト値は別途確定する。
 
 ### 2.2 子機CDC設定
 
 | 項目 | 内容 |
 |---|---|
 | `gpio` | 監視対象GPIO番号 |
-| `edge` | `OFF_TO_ON` / `ON_TO_OFF` |
+| `input_event` | `OFF_TO_ON` / `ON_TO_OFF` / `CLICK` / `DOUBLE_CLICK` / `LONG_PRESS` |
 | `action_id` | 発生時に送信するAction ID |
+
+例:
+
+```text
+GPIO 5 / CLICK        / Action ID 10
+GPIO 5 / DOUBLE_CLICK / Action ID 11
+GPIO 5 / LONG_PRESS   / Action ID 12
+GPIO 8 / OFF_TO_ON    / Action ID 20
+GPIO 8 / ON_TO_OFF    / Action ID 21
+```
 
 子機はAction名、対象家族、Web表示メッセージ、状態変更内容、通知設定、LINE / Slack等の送信先を保持・解釈しない。
 
@@ -53,8 +72,6 @@ Action発生条件は次のEdgeとする。
 - `state_value`
 - `enabled`
 
-Actionの対象範囲は `target_type` で明示する。
-
 - `FAMILY`: 家族対象。`target_family_id` 必須。
 - `COMMON`: 共通対象。`target_family_id` はNULL。
 
@@ -62,16 +79,11 @@ Actionの対象範囲は `target_type` で明示する。
 
 家族対象Actionは対象家族ごとに別Action IDを登録する。
 
-同じAction内容であっても対象家族が異なる場合は別Actionとして扱う。
+同じAction内容でも対象家族が異なる場合は別Actionとして扱う。
 
-```text
-Action ID 4 = 父 / 入室NG
-Action ID 5 = 母 / 入室NG
-```
+1つのAction IDが持つ `target_family_id` は最大1件とする。
 
-1つのAction IDが持つ `target_family_id` は最大1件とする。複数家族を1つのAction IDに紐づけない。
-
-親機は受信したAction IDからAction内容と対象家族を直接解決する。送信元 `device_id` からAction対象者を推測しない。
+親機は受信したAction IDからAction内容と対象家族を直接解決し、送信元 `device_id` からAction対象者を推測しない。
 
 ### 3.3 基本Actionパターン
 
@@ -89,7 +101,7 @@ Action ID 5 = 母 / 入室NG
 
 この7種類は固定Action IDではない。
 
-FAMILYの5種類は必要な家族ごとにAction定義を作成するため、Action ID数が家族数に応じて増えることを許容する。COMMONの2種類は対象家族を持たない。
+FAMILYの5種類は必要な家族ごとにAction定義を作成する。COMMONの2種類は対象家族を持たない。
 
 「会議中」の解除専用Actionは設けず、対象家族の `入室OK` Actionを使用する。
 
@@ -97,11 +109,9 @@ FAMILYの5種類は必要な家族ごとにAction定義を作成するため、A
 
 `FAMILY` Actionでは `target_family_id` を必須とし、家族マスタの `display_name` を参照する。
 
-`COMMON` Actionでは `target_family_id = NULL` とする。「家」「共通」等のダミー家族は作成しない。
+`COMMON` Actionでは `target_family_id = NULL` とする。
 
 `web_message` 内の `{target}` は親機が対象家族の `display_name` で展開する。
-
-Web表示メッセージにはデフォルト値を用意し、親機CDCで変更可能とする。
 
 ### 3.5 通知設定
 
@@ -111,7 +121,7 @@ Web表示メッセージにはデフォルト値を用意し、親機CDCで変�
 - 通知有無
 - 通知先家族
 
-Actionの対象家族と通知先家族は別概念とする。LINE / Slack等の実送信先も家族に紐づく別設定として管理する。
+Actionの対象家族と通知先家族は別概念とする。
 
 ---
 
@@ -120,11 +130,11 @@ Actionの対象家族と通知先家族は別概念とする。LINE / Slack等�
 | 情報・処理 | 子機 | 親機 |
 |---|---|---|
 | GPIO監視 | ○ | × |
-| Edge検出 | ○ | × |
-| GPIO+EdgeへのAction ID割当 | ○ | × |
+| Input Event生成 | ○ | × |
+| CLICK / DOUBLE_CLICK / LONG_PRESS判定 | ○ | × |
+| GPIO+Input EventへのAction ID割当 | ○ | × |
 | Action IDの意味解釈 | × | ○ |
 | `target_type` / 対象家族 | × | ○ |
-| 対象者表示名 | × | ○ |
 | Web表示メッセージ | × | ○ |
 | 状態変更 | × | ○ |
 | EVENT履歴 | × | ○ |
@@ -138,7 +148,12 @@ Actionの対象家族と通知先家族は別概念とする。LINE / Slack等�
 [子機]
 GPIO
   ↓
-OFF_TO_ON / ON_TO_OFF
+Input Event
+  ├─ OFF_TO_ON
+  ├─ ON_TO_OFF
+  ├─ CLICK
+  ├─ DOUBLE_CLICK
+  └─ LONG_PRESS
   ↓
 Action ID
   ↓ UDP EVENT
@@ -171,5 +186,3 @@ Action定義参照
 - `docs/parent-database-design.md`
 - `docs/parent-overview-design.md`
 - `docs/parent-web-status-design.md`
-
-基本Actionパターン、対象範囲、状態種別・状態値は本書の定義を基準とする。実際のAction IDはAction定義ごとに一意に割り当てる。
