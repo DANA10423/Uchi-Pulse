@@ -6,6 +6,8 @@ PHASE 6/7/8では、GPIO入力から共通Input Eventを判定し、設定され
 - デバウンス付きGPIO入力変化検出
 - `OFF_TO_ON` / `ON_TO_OFF` / `CLICK` / `DOUBLE_CLICK` / `LONG_PRESS`
 - `GPIO + Input Event -> Action ID` のデータ駆動マッピング
+- GPIO入力は最大10個まで設定可能
+- GPIO 2/3/4固定ではなく、Pico W / Pico 2 Wの外部利用可能GPIO（0〜22、26〜28）から選択可能
 - ホスト上でテスト可能な入力ロジックとUDPプロトコル処理
 - `boot_id + sequence` によるEVENT識別子
 - EVENT ACK待機（60秒）と同一EVENTの最大3回再送
@@ -13,6 +15,7 @@ PHASE 6/7/8では、GPIO入力から共通Input Eventを判定し、設定され
 - USB CDCのLF区切りJSON（`get_config` / `set_config` / `factory_reset` / `reboot`）
 - 設定のvalidation、Flash保存、次回起動時の復元
 
+GPIO 23/24/25/29 はオンボードCYW43 Wi-Fi接続で使用するため、GPIO入力設定の対象外です。
 UDPは正式な共通wire formatを使用します。GPIO番号、Input Event、Actionの業務的意味はUDPへ含めません。
 
 ## ビルド
@@ -35,7 +38,8 @@ BOOTSEL/UF2 書き込みを使う場合は生成された ELF を `elf2uf2-rs` �
 
 Wi-Fi・Hub接続先は現時点では `src/config.rs` のコンパイル時設定です。GPIO・Input Mapping・
 ジェスチャー時間・UDP送信タイミングはUSB CDCから変更でき、最終4 KiBの設定保存領域へ保存されます。
-保存設定は次回起動時に反映されます。Input Mappingには業務名を持たせず、Action IDだけを保持します。
+保存設定は次回起動時に反映されます。GPIO入力は最大10個で、各入力のGPIO番号は外部利用可能GPIOから任意に選択できます。
+Input Mappingには業務名を持たせず、Action IDだけを保持します。
 
 設定保存領域は2 MiBイメージの最終4 KiBを使用し、リンカースクリプトからコード領域を除外しています。
 Pico W / Pico 2 WのFlash HALアダプタは `src/storage.rs` の共通ストレージ抽象化へ接続されます。
