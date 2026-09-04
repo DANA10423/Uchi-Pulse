@@ -4,7 +4,7 @@
 
 本書はUchi-Pulse親機で使用するSQLiteデータベースの基本設計を定義する。
 
-親機は、デバイス情報、家族情報、Action定義、通知設定、イベント履歴を永続管理する。GPIO番号・入力エッジ・GPIOへのAction ID割当は子機側設定であり、親機DBのAction定義には含めない。
+親機は、デバイス情報、家族情報、Action定義、通知設定、イベント履歴を永続管理する。GPIO番号・Input Event・GPIOへのAction ID割当は子機側設定であり、親機DBのAction定義には含めない。
 
 通信状態および入室可否等の現在値は親機稼働中のメモリ上で管理し、必要な状態はイベント履歴から復元する。
 
@@ -15,7 +15,7 @@
 ### 2.1 子機側で保持する設定
 
 - GPIO番号
-- Edge（`OFF_TO_ON` / `ON_TO_OFF`）
+- Input Event（`OFF_TO_ON` / `ON_TO_OFF` / `CLICK` / `DOUBLE_CLICK` / `LONG_PRESS`）
 - Action ID
 
 子機はAction IDの意味を解釈しない。
@@ -31,8 +31,6 @@
 - 通知先家族
 - 家族ごとのLINE / Slack等の実送信先設定
 - イベント履歴
-
-外部サービスへの実際の通知送信処理は通知機能が担当し、DB層の責務には含めない。
 
 ---
 
@@ -61,8 +59,6 @@
 | `updated_at` | TEXT | NO | 更新日時 |
 | `enabled` | INTEGER | NO | 1=有効、0=無効 |
 
-`device_type` は表示・管理上の分類であり、GPIOやAction処理を分岐させるためには使用しない。
-
 ---
 
 ## 5. families
@@ -73,7 +69,7 @@
 | `display_name` | TEXT | NO | Web等に表示する名前 |
 | `enabled` | INTEGER | NO | 1=有効、0=無効 |
 
-Actionには表示名文字列を直接保存せず `family_id` を参照する。「家」「共通」等のダミー家族は作成しない。
+Actionには表示名文字列を直接保存せず `family_id` を参照する。
 
 ---
 
@@ -103,11 +99,6 @@ Actionには表示名文字列を直接保存せず `family_id` を参照する�
 
 FAMILY Actionは対象家族ごとに別Action IDを登録する。
 
-```text
-Action ID 4 = 父 / 入室NG
-Action ID 5 = 母 / 入室NG
-```
-
 設計ルール:
 
 - 1つのAction IDが持つ `target_family_id` は最大1件。
@@ -118,19 +109,25 @@ Action ID 5 = 母 / 入室NG
 
 ### 6.4 基本Actionパターン
 
-初期版では以下7種類を基本パターンとして定義する。これらは固定Action IDではない。
+初期版では以下11種類を基本パターンとして定義する。これらは固定Action IDではない。
 
 | Action | target_type | state_type | state_value | デフォルト `web_message` |
 |---|---|---|---|---|
 | ご飯通知 | `FAMILY` | `MEAL_NOTICE` | `ON` | `{target}：ご飯です` |
 | ご飯通知クリア | `FAMILY` | `MEAL_NOTICE` | `OFF` | `{target}：ご飯通知を解除しました` |
+| おやつ通知 | `FAMILY` | `SNACK_NOTICE` | `ON` | `{target}：おやつです` |
+| おやつ通知クリア | `FAMILY` | `SNACK_NOTICE` | `OFF` | `{target}：おやつ通知を解除しました` |
+| HELP通知 | `FAMILY` | `HELP_NOTICE` | `ON` | `{target}：HELPです` |
+| HELP通知クリア | `FAMILY` | `HELP_NOTICE` | `OFF` | `{target}：HELP通知を解除しました` |
 | 入室OK | `FAMILY` | `ENTRY_PERMISSION` | `OK` | `{target}：入室OK` |
 | 入室NG | `FAMILY` | `ENTRY_PERMISSION` | `NG` | `{target}：入室NG` |
 | 会議中 | `FAMILY` | `ENTRY_PERMISSION` | `MEETING` | `{target}：会議中` |
 | ポスト投函 | `COMMON` | `MAILBOX` | `ON` | `ポストに投函がありました` |
 | ポスト投函解除 | `COMMON` | `MAILBOX` | `OFF` | `ポストの投函状態を解除しました` |
 
-FAMILYの5種類は必要な家族ごとにActionレコードを登録する。COMMONの2種類は `target_family_id = NULL` とする。
+FAMILYの9種類は必要な家族ごとにActionレコードを登録する。COMMONの2種類は `target_family_id = NULL` とする。
+
+`MEAL_NOTICE` / `SNACK_NOTICE` / `HELP_NOTICE` は、それぞれ独立した通知状態として `ON` / `OFF` を持つ。
 
 会議中の解除専用Actionは設けず、対象家族の入室OK Actionで状態を変更する。
 
@@ -170,8 +167,6 @@ FAMILYの5種類は必要な家族ごとにActionレコードを登録する。C
 | `destination` | TEXT | NO | サービス上の実送信先情報 |
 | `enabled` | INTEGER | NO | 1=有効、0=無効 |
 
-通知サービス固有の認証情報・秘密情報の保存方式は通知機能の詳細設計で別途定義する。
-
 ---
 
 ## 9. events
@@ -185,8 +180,6 @@ FAMILYの5種類は必要な家族ごとにActionレコードを登録する。C
 | `payload` | TEXT | NO | 受信JSON本文 |
 
 `(device_id, event_id)` を一意とし、UDP再送による二重登録を防止する。
-
-Action IDはUDP EVENTの `action_id` として受信する。
 
 ---
 
@@ -221,38 +214,39 @@ eventsへ履歴保存
 
 ## 11. 現在状態とDB
 
-通信状態や入室可否等の現在値そのものは専用DB状態として保持せず、親機メモリ上で管理する。
+通信状態や入室可否、ご飯通知、おやつ通知、HELP通知等の現在値は親機メモリ上で管理し、必要な状態はイベント履歴から復元する。
 
-親機起動時は `devices` の有効な子機から `DeviceState` を生成し、通信状態を `INITIAL_WAIT` とする。入室可否は `events` に保存された最新の入室可否Action履歴から復元する。
+通信状態:
 
-`DeviceState` の基本情報:
+- `INITIAL_WAIT`
+- `ONLINE`
+- `OFFLINE`
 
-- `device_id`
-- `last_seen_at`
-- `status`: `INITIAL_WAIT` / `ONLINE` / `OFFLINE`
-- `room_access_status`: `UNSET` / `OK` / `NG` / `MEETING`
+入室可否:
 
-```text
-INITIAL_WAIT --正常受信--> ONLINE
-INITIAL_WAIT --オフライン判定時間超過--> OFFLINE
-ONLINE       --正常受信--> ONLINE
-ONLINE       --オフライン判定時間超過--> OFFLINE
-OFFLINE      --正常受信--> ONLINE
-```
+- `UNSET`
+- `OK`
+- `NG`
+- `MEETING`
 
-通信状態が変化しても入室可否は自動変更しない。
+通知状態:
+
+- `MEAL_NOTICE`: `ON` / `OFF`
+- `SNACK_NOTICE`: `ON` / `OFF`
+- `HELP_NOTICE`: `ON` / `OFF`
+
+通信状態が変化しても各Action状態は自動変更しない。
 
 ---
 
 ## 12. 設計方針まとめ
 
-- 子機のGPIO・Edge・Action ID割当と親機のAction定義を混在させない。
+- 子機の `GPIO + Input Event + Action ID` 割当と親機のAction定義を混在させない。
 - 子機はAction IDの意味を解釈しない。
-- 7種類は基本Actionパターンであり固定Action IDではない。
+- 11種類は基本Actionパターンであり固定Action IDではない。
 - FAMILY Actionは対象家族ごとに別Action IDを持つ。
 - 1つのAction IDには対象家族を最大1人だけ持たせる。
-- 親機はAction IDから対象家族を直接解決し、device_idから対象者を推測しない。
+- `MEAL_NOTICE` / `SNACK_NOTICE` / `HELP_NOTICE` を独立したON/OFF状態として扱う。
 - Web表示メッセージはAction定義に持ち、`{target}` を家族表示名で展開できる。
 - スマートフォン通知設定はAction定義から分離する。
 - Action対象家族と通知先家族を別概念として扱う。
-- 現在状態はメモリで管理し、必要な状態はイベント履歴から復元する。
