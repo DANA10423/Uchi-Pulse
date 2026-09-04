@@ -235,11 +235,18 @@ UDP EVENT受信
     ↓
 Action ID取得
     ↓
-actions取得
-    ↓
-eventsへ履歴保存
-    ↓
-action_state_changesを0..n件取得
+重複確認
+    ├─ 重複あり → 履歴・Action処理を再実行せずACK
+    └─ 新規
+        ↓
+    actions取得
+        ↓
+    enabled / target確認
+    action_state_changes全件取得・検証
+        ↓
+    eventsへ履歴保存
+        ↓
+    検証済み状態変更を0..n件適用
     ↓
 定義された状態をメモリへ反映
     ↓
@@ -251,6 +258,10 @@ Web表示が定義されていれば表示情報へ反映
 ```
 
 外部通知失敗はUDP ACK、履歴保存、状態更新を失敗させない。
+
+存在しないAction、無効化されたAction、または`target_type`と`target_family_id`の組み合わせが不正なActionは、EVENT履歴へ保存せず、状態更新およびACK送信を行わない。
+
+Actionの事前検証とEVENT履歴保存が完了した後のAction内部処理失敗は、EVENT再送によるAction再実行を行わないためACKを返す。内部失敗は親機内で記録・処理する。
 
 ---
 

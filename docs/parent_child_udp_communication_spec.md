@@ -85,30 +85,29 @@ EVENT受信
 JSON / device_id / event_id 検証
  ↓
 重複チェック
- ↓
-EVENT履歴保存
- ↓
-Action処理
- ├─ 状態変更 0..n
- └─ Web表示処理
- ↓
-ACK送信
- ↓
-外部通知処理
+ ├─ 重複あり → 履歴・Action処理を再実行せずACK送信
+ └─ 新規
+     ↓
+   Action取得・enabled / target / state changes検証
+     ↓
+   EVENT履歴保存
+     ↓
+   Action処理
+    ├─ 状態変更 0..n
+    └─ Web表示処理
+     ↓
+   ACK送信
+     ↓
+   外部通知処理
 ```
 
-重複EVENT:
-```text
-EVENT受信
- ↓
-重複確認
- ↓
-履歴・Action処理は再実行しない
- ↓
-ACK送信
-```
+重複EVENTではActionの再検証・再実行を行わず、履歴を追加せずACKのみ送信する。
 
 外部Slack/LINE通知の完了はACK条件に含めない。通知失敗によってACK、履歴、状態変更を失敗扱いにしない。
+
+存在しないAction、無効化されたAction、または対象定義が不正なActionのEVENTは受理しない。これらはEVENT履歴へ保存せず、状態更新およびACK送信も行わない。
+
+Actionの事前検証とEVENT履歴保存が完了した後にAction内部処理が失敗した場合は、同一EVENTの再送をAction再実行に利用しないためACKを返す。内部失敗は親機内部のエラーとして記録・処理し、重複EVENTでは履歴・Action処理を再実行せずACKのみ返す。
 
 ## 7. 通信状態
 正常なHELLO / HEARTBEAT / EVENTを受信した場合、対象子機をONLINEとして扱う。
@@ -126,7 +125,17 @@ OFFLINE      --正常受信--> ONLINE
 ## 8. 親機起動時の探索
 親機起動時は、子機へHELLO送信を促すためのブロードキャスト要求を送信できる構成とする。
 
-ブロードキャスト要求の専用メッセージ形式は親機起動処理の詳細実装時に定義する。子機から親機への通常メッセージ形式 `HELLO` / `HEARTBEAT` / `EVENT` / `ACK` には影響させない。
+専用メッセージは、親機から子機へ次のJSONをブロードキャストする。
+
+```json
+{
+  "type": "HELLO_REQUEST"
+}
+```
+
+`HELLO_REQUEST` は親機起動時の探索要求専用であり、通常の4メッセージには含めない。子機が応答する場合は、子機から親機への通常の `HELLO`（`type` と `device_id`）を送信する。`HELLO_REQUEST` 自体はACK対象外である。
+
+親機のデフォルト送信先は `255.255.255.255:5000` とし、起動時設定で変更可能とする。
 
 ## 9. Action定義との境界
 UDP層はActionの意味を解釈しない。

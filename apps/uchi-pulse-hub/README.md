@@ -7,28 +7,26 @@ Uchi Pulse の Raspberry Pi Zero / Zero 2 W 向け親機ベースプログラム
 
 - UDP待受（デフォルト `0.0.0.0:5000`）
 - `HELLO` / `HEARTBEAT` / `EVENT` の受信
-- 有効なパケットからの子機自動登録
-- `device_id` を識別子とした送信元IP/ポート更新
-- ONLINE/OFFLINE管理（デフォルト210秒）
-- `device_id + message_id` によるEVENT重複排除
+- SQLiteに登録された `enabled = 1` の子機だけを処理
+- ONLINE/OFFLINE管理（デフォルト180秒、メモリ上のみ）
+- `(device_id, event_id)` によるEVENT重複排除
 - EVENTのACK返信（重複EVENTにも再返信）
-- 子機一覧とイベント履歴のメモリ保持（再起動時に破棄）
+- EVENT履歴のSQLite保存
+- 起動時の `HELLO_REQUEST` ブロードキャスト
 
 ## 起動
 
 ```sh
 cargo run -p uchi-pulse-hub
-cargo run -p uchi-pulse-hub -- --bind 0.0.0.0:5000 --offline-timeout-sec 210
+cargo run -p uchi-pulse-hub -- --bind 0.0.0.0:5000 --db ./uchi-pulse.db --offline-timeout-sec 180
 ```
 
-環境変数 `UCHI_PULSE_BIND` と `UCHI_PULSE_OFFLINE_TIMEOUT_SEC` でも設定できます。
+起動時の設定は `--bind`、`--db`、`--hello-request-addr`、`--offline-timeout-sec` で指定できます。対応する環境変数は `UCHI_PULSE_BIND`、`UCHI_PULSE_DB`、`UCHI_PULSE_HELLO_REQUEST_ADDR`、`UCHI_PULSE_OFFLINE_TIMEOUT_SEC` です。
 
-現段階では Web UI、永続化、親機から子機への問い合わせ通知・出力制御は未実装です。
-このプロジェクトは、それらを追加するための通信・状態管理のベースです。
+現段階ではAction実行エンジン、Web UI、外部通知、子機側の新UDP通信処理は未実装です。
 
 ## テスト
 
 ```sh
 cargo test -p uchi-pulse-hub
 ```
-

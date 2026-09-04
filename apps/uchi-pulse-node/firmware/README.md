@@ -11,3 +11,8 @@ files in this directory before building the firmware:
 Use the matching files from the Embassy `cyw43-firmware` package. They are
 intentionally not committed to this repository.
 
+The node configuration uses the final 4 KiB erase sector of the configured
+2 MiB flash image. The linker scripts reserve this sector from the firmware
+image for both RP2040 and RP2350; it is erased independently by the CDC
+`factory_reset` operation. This is configuration storage only, not a whole
+flash erase.

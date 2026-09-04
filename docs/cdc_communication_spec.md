@@ -72,20 +72,38 @@ Uchi-PulseにおけるUSB CDC通信の共通仕様と、親機・子機それぞ
 ### 4.2 子機設定例
 ```json
 {
+  "device_id": "node-01",
+  "gpio_inputs": [
+    { "gpio": 2, "active_high": false, "debounce_ms": 30 }
+  ],
   "input_mappings": [
     {
-      "gpio": 5,
+      "gpio": 2,
       "input_event": "CLICK",
-      "action_id": 10
+      "action_id": 10,
+      "enabled": true
     }
   ],
   "double_click_interval_ms": 400,
-  "long_press_threshold_ms": 1000
+  "long_press_threshold_ms": 1000,
+  "ack_timeout_ms": 60000,
+  "event_retry_count": 3,
+  "heartbeat_interval_sec": 180
 }
 ```
 
+`set_config.params` は上記設定オブジェクトを直接指定する。`get_config` の
+`data` は同じ設定オブジェクトを返す。`gpio_inputs` と
+`input_mappings` の各要素には、子機が対応するGPIO、Input Event、Action ID、
+`enabled` を指定する。`set_config` は全設定項目を必須とし、保存後の次回起動時に
+適用する。
+
 - `double_click_interval_ms`: デフォルト400ms
 - `long_press_threshold_ms`: デフォルト1000ms
+- `debounce_ms`: デフォルト30ms（GPIO入力ごと）
+- `ack_timeout_ms`: デフォルト60000ms
+- `event_retry_count`: デフォルト3回
+- `heartbeat_interval_sec`: デフォルト180秒
 - 両設定は取得・変更・永続保存可能とする。
 - `CLICK` と `DOUBLE_CLICK` は同一操作から重複発生させない。
 

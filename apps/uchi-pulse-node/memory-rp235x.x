@@ -1,6 +1,7 @@
 /* Raspberry Pi Pico 2 W / RP2350, 2 MiB is a safe default for the image. */
 MEMORY {
-    FLASH : ORIGIN = 0x10000000, LENGTH = 2048K
+    /* Reserve the final 4 KiB erase sector for node configuration. */
+    FLASH : ORIGIN = 0x10000000, LENGTH = 2048K - 0x1000
     RAM   : ORIGIN = 0x20000000, LENGTH = 512K
     SRAM8 : ORIGIN = 0x20080000, LENGTH = 4K
     SRAM9 : ORIGIN = 0x20081000, LENGTH = 4K
@@ -15,4 +16,3 @@ SECTIONS {
 } INSERT AFTER .vector_table;
 
 _stext = ADDR(.start_block) + SIZEOF(.start_block);
-

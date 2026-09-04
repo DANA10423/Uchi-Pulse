@@ -1,14 +1,19 @@
 use std::env;
 use std::io;
 use std::net::UdpSocket;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use uchi_pulse_hub::{
-    DEFAULT_BIND_ADDR, DEFAULT_OFFLINE_TIMEOUT, HubState, MessageType, NodeStatus, encode_ack,
+    DEFAULT_BIND_ADDR, DEFAULT_DB_PATH, DEFAULT_HELLO_REQUEST_ADDR, DEFAULT_OFFLINE_TIMEOUT_SEC,
+    action::ActionEngine,
+    db::Database,
+    udp::{ActionExecutionStatus, HubUdpProcessor, PacketOutcome, encode_hello_request},
 };
 
 struct HubConfig {
     bind_addr: String,
+    db_path: String,
+    hello_request_addr: String,
     offline_timeout: Duration,
 }
 
@@ -16,6 +21,9 @@ impl HubConfig {
     fn from_args() -> Result<Self, String> {
         let mut bind_addr =
             env::var("UCHI_PULSE_BIND").unwrap_or_else(|_| DEFAULT_BIND_ADDR.into());
+        let mut db_path = env::var("UCHI_PULSE_DB").unwrap_or_else(|_| DEFAULT_DB_PATH.into());
+        let mut hello_request_addr = env::var("UCHI_PULSE_HELLO_REQUEST_ADDR")
+            .unwrap_or_else(|_| DEFAULT_HELLO_REQUEST_ADDR.into());
         let mut offline_timeout = env::var("UCHI_PULSE_OFFLINE_TIMEOUT_SEC")
             .ok()
             .map(|value| {
@@ -25,13 +33,21 @@ impl HubConfig {
             })
             .transpose()?
             .map(Duration::from_secs)
-            .unwrap_or(DEFAULT_OFFLINE_TIMEOUT);
+            .unwrap_or_else(|| Duration::from_secs(DEFAULT_OFFLINE_TIMEOUT_SEC));
 
         let mut args = env::args().skip(1);
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--bind" => {
                     bind_addr = args.next().ok_or("--bind requires an address")?;
+                }
+                "--db" => {
+                    db_path = args.next().ok_or("--db requires a path")?;
+                }
+                "--hello-request-addr" => {
+                    hello_request_addr = args
+                        .next()
+                        .ok_or("--hello-request-addr requires an address")?;
                 }
                 "--offline-timeout-sec" => {
                     let value = args
@@ -44,10 +60,12 @@ impl HubConfig {
                     );
                 }
                 "--help" | "-h" => {
-                    println!("Usage: uchi-pulse-hub [--bind ADDR] [--offline-timeout-sec SECONDS]");
                     println!(
-                        "Defaults: {DEFAULT_BIND_ADDR}, {} seconds",
-                        DEFAULT_OFFLINE_TIMEOUT.as_secs()
+                        "Usage: uchi-pulse-hub [--bind ADDR] [--db PATH] [--hello-request-addr ADDR] [--offline-timeout-sec SECONDS]"
+                    );
+                    println!(
+                        "Defaults: bind={DEFAULT_BIND_ADDR}, db={DEFAULT_DB_PATH}, hello-request={DEFAULT_HELLO_REQUEST_ADDR}, offline-timeout={} seconds",
+                        DEFAULT_OFFLINE_TIMEOUT_SEC
                     );
                     std::process::exit(0);
                 }
@@ -57,6 +75,8 @@ impl HubConfig {
 
         Ok(Self {
             bind_addr,
+            db_path,
+            hello_request_addr,
             offline_timeout,
         })
     }
@@ -65,68 +85,94 @@ impl HubConfig {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = HubConfig::from_args()
         .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
+    let database = Database::open(&config.db_path)?;
     let socket = UdpSocket::bind(&config.bind_addr)?;
+    socket.set_broadcast(true)?;
     socket.set_read_timeout(Some(Duration::from_secs(1)))?;
     println!("Uchi Pulse Hub listening on {}", config.bind_addr);
 
-    let mut state = HubState::new(config.offline_timeout);
+    let mut processor = HubUdpProcessor::from_database(
+        database.clone(),
+        Instant::now(),
+        config.offline_timeout,
+        ActionEngine::new(database),
+    )?;
+    let mut hello_request = [0u8; 64];
+    let hello_request_len = encode_hello_request(&mut hello_request).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("HELLO_REQUEST encoding failed: {error:?}"),
+        )
+    })?;
+    socket.send_to(
+        &hello_request[..hello_request_len],
+        &config.hello_request_addr,
+    )?;
+
     let mut buffer = [0u8; 2048];
     loop {
         match socket.recv_from(&mut buffer) {
-            Ok((length, source)) => {
+            Ok((length, _source)) => {
                 let now = Instant::now();
-                match state.handle_datagram(&buffer[..length], source, now) {
-                    Ok(result) => {
-                        if result.message_type == MessageType::Event {
-                            socket.send_to(&encode_ack(result.message_id), source)?;
-                            if result.duplicate {
-                                println!(
-                                    "duplicate EVENT from {} message_id={} (ACK resent)",
-                                    result.device_id, result.message_id
-                                );
-                            } else {
-                                println!(
-                                    "EVENT from {} message_id={}",
-                                    result.device_id, result.message_id
-                                );
+                match processor.process_datagram(&buffer[..length], now, &unix_timestamp()) {
+                    Ok(PacketOutcome::EventAccepted {
+                        device_id,
+                        event_id,
+                        duplicate,
+                        action_status,
+                        ack,
+                    }) => {
+                        let mut ack_buffer = [0u8; 256];
+                        let ack_length =
+                            uchi_pulse_hub::common_protocol::codec::encode(&ack, &mut ack_buffer)
+                                .map_err(|error| {
+                                io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    format!("ACK encoding failed: {error:?}"),
+                                )
+                            })?;
+                        socket.send_to(&ack_buffer[..ack_length], _source)?;
+                        if !duplicate {
+                            match action_status {
+                                ActionExecutionStatus::Applied => {
+                                    println!("EVENT from {device_id} event_id={event_id}");
+                                }
+                                ActionExecutionStatus::Failed(error) => {
+                                    eprintln!(
+                                        "Action failed after EVENT acceptance: device_id={device_id} event_id={event_id}: {error}"
+                                    );
+                                }
+                                ActionExecutionStatus::SkippedDuplicate => {}
                             }
-                        } else {
-                            println!(
-                                "{} from {}",
-                                format_message_type(result.message_type),
-                                result.device_id
-                            );
                         }
                     }
-                    Err(error) => eprintln!("discarding packet from {source}: {error}"),
+                    Ok(
+                        PacketOutcome::Ignored
+                        | PacketOutcome::HelloAccepted { .. }
+                        | PacketOutcome::HeartbeatAccepted { .. },
+                    ) => {}
+                    Err(error @ uchi_pulse_hub::udp::UdpProcessingError::Database(_)) => {
+                        eprintln!("discarding UDP packet: {error}");
+                    }
+                    Err(_) => {}
                 }
-                state.mark_offline(now);
+                processor.mark_offline(now);
             }
             Err(error)
                 if error.kind() == io::ErrorKind::TimedOut
                     || error.kind() == io::ErrorKind::WouldBlock =>
             {
-                state.mark_offline(Instant::now());
-                print_status(&state);
+                processor.mark_offline(Instant::now());
             }
             Err(error) => return Err(error.into()),
         }
     }
 }
 
-fn format_message_type(message_type: MessageType) -> &'static str {
-    match message_type {
-        MessageType::Hello => "HELLO",
-        MessageType::Heartbeat => "HEARTBEAT",
-        MessageType::Event => "EVENT",
-        MessageType::Ack => "ACK",
-    }
-}
-
-fn print_status(state: &HubState) {
-    for node in state.nodes() {
-        if node.status == NodeStatus::Offline {
-            eprintln!("Node {} is OFFLINE", node.device_id);
-        }
-    }
+fn unix_timestamp() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string()
 }

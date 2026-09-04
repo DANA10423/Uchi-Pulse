@@ -8,43 +8,108 @@ fn main() {
 
 #[cfg(all(feature = "firmware", target_os = "none"))]
 mod firmware {
-    use portable_atomic::{AtomicU32, Ordering};
-
     use cyw43::{JoinOptions, aligned_bytes};
     use cyw43_pio::{DEFAULT_CLOCK_DIVIDER, PioSpi};
-    use defmt::{error, info, warn};
+    use defmt::{info, warn};
     use defmt_rtt as _;
     use embassy_executor::Spawner;
     use embassy_net::udp::{PacketMetadata, UdpSocket};
     use embassy_net::{IpEndpoint, Ipv4Address, StackResources};
     use embassy_rp::clocks::RoscRng;
+    use embassy_rp::flash::{Blocking, Flash};
     use embassy_rp::gpio::{Input, Output, Pull};
-    use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, PIO0};
+    use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, FLASH, PIO0, USB};
     use embassy_rp::pio::{InterruptHandler, Pio};
     use embassy_rp::{bind_interrupts, dma};
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
     use embassy_sync::channel::Channel;
-    use embassy_time::{Duration, Timer, with_timeout};
+    use embassy_time::{Duration, Instant, Timer, with_deadline};
+    use embassy_usb::class::cdc_acm::{CdcAcmClass, State as CdcState};
+    use embassy_usb::{Builder, UsbDevice};
     use panic_probe as _;
     use static_cell::StaticCell;
 
-    use uchi_pulse_node::config::{DEFAULT_CONFIG, InputFunction};
-    use uchi_pulse_node::protocol::{self, EventType, MessageId};
+    use uchi_pulse_node::cdc::{
+        CdcAction, CdcLineParser, MAX_CDC_LINE_SIZE, NodeCdcHandler as CdcCommandHandler,
+    };
+    use uchi_pulse_node::config::{DEFAULT_CONFIG, PersistedNodeConfig};
+    use uchi_pulse_node::input::{InputController, TriggeredAction};
+    use uchi_pulse_node::storage::{CONFIG_STORAGE_SIZE, ConfigManager, ConfigStorage};
+    use uchi_pulse_node::udp::{NodeUdpProtocol, PendingEvent, RetryPolicy};
 
     bind_interrupts!(struct Irqs {
         PIO0_IRQ_0 => InterruptHandler<PIO0>;
         DMA_IRQ_0 => dma::InterruptHandler<DMA_CH0>, dma::InterruptHandler<DMA_CH1>;
+        USBCTRL_IRQ => embassy_rp::usb::InterruptHandler<USB>;
     });
 
-    static NEXT_MESSAGE_ID: AtomicU32 = AtomicU32::new(1);
-    static EVENTS: Channel<CriticalSectionRawMutex, OutboundEvent, 8> = Channel::new();
+    const FLASH_SIZE: usize = 2 * 1024 * 1024;
+    const CONFIG_STORAGE_OFFSET: u32 = (FLASH_SIZE - CONFIG_STORAGE_SIZE) as u32;
+    type NodeFlash = Flash<'static, FLASH, Blocking, FLASH_SIZE>;
+    type FirmwareCdcHandler = CdcCommandHandler<FlashConfigStorage>;
 
-    #[derive(Clone, Copy)]
-    struct OutboundEvent {
-        channel: u8,
-        event_type: EventType,
-        function: InputFunction,
+    struct FlashConfigStorage {
+        flash: NodeFlash,
     }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum FlashStorageError {
+        Flash(embassy_rp::flash::Error),
+        TooLarge,
+    }
+
+    impl FlashConfigStorage {
+        fn new(flash: NodeFlash) -> Self {
+            Self { flash }
+        }
+    }
+
+    impl ConfigStorage for FlashConfigStorage {
+        type Error = FlashStorageError;
+
+        fn read(&mut self, destination: &mut [u8]) -> Result<usize, Self::Error> {
+            self.flash
+                .blocking_read(CONFIG_STORAGE_OFFSET, destination)
+                .map_err(FlashStorageError::Flash)?;
+            Ok(destination
+                .iter()
+                .position(|byte| *byte == 0xff)
+                .unwrap_or(destination.len()))
+        }
+
+        fn write(&mut self, data: &[u8]) -> Result<(), Self::Error> {
+            if data.len() > CONFIG_STORAGE_SIZE {
+                return Err(FlashStorageError::TooLarge);
+            }
+            let end = CONFIG_STORAGE_OFFSET + CONFIG_STORAGE_SIZE as u32;
+            self.flash
+                .blocking_erase(CONFIG_STORAGE_OFFSET, end)
+                .map_err(FlashStorageError::Flash)?;
+            self.flash
+                .blocking_write(CONFIG_STORAGE_OFFSET, data)
+                .map_err(FlashStorageError::Flash)
+        }
+
+        fn clear(&mut self) -> Result<(), Self::Error> {
+            let end = CONFIG_STORAGE_OFFSET + CONFIG_STORAGE_SIZE as u32;
+            self.flash
+                .blocking_erase(CONFIG_STORAGE_OFFSET, end)
+                .map_err(FlashStorageError::Flash)
+        }
+    }
+
+    static ACTION_EVENTS: Channel<CriticalSectionRawMutex, TriggeredAction, 8> = Channel::new();
+
+    static EVENT_RX_METADATA: StaticCell<[PacketMetadata; 4]> = StaticCell::new();
+    static EVENT_RX_BUFFER: StaticCell<[u8; 512]> = StaticCell::new();
+    static EVENT_TX_METADATA: StaticCell<[PacketMetadata; 4]> = StaticCell::new();
+    static EVENT_TX_BUFFER: StaticCell<[u8; 512]> = StaticCell::new();
+    static RUNTIME_CONFIG: StaticCell<PersistedNodeConfig> = StaticCell::new();
+    static USB_CONFIG_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
+    static USB_BOS_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
+    static USB_MSOS_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
+    static USB_CONTROL_BUFFER: StaticCell<[u8; 64]> = StaticCell::new();
+    static CDC_STATE: StaticCell<CdcState<'static>> = StaticCell::new();
 
     #[embassy_executor::task]
     async fn cyw43_task(
@@ -59,60 +124,171 @@ mod firmware {
     }
 
     #[embassy_executor::task]
-    async fn input_task(inputs: InputSet) -> ! {
-        let mut states = [DebounceState::new(); 3];
+    async fn input_task(inputs: InputSet, config: &'static PersistedNodeConfig) -> ! {
+        let mut controller = match InputController::new(config.input_config()) {
+            Ok(controller) => controller,
+            Err(_) => loop {
+                Timer::after_secs(1).await;
+            },
+        };
+        let initial_raw_states = [
+            (2, inputs.one.is_high()),
+            (3, inputs.two.is_high()),
+            (4, inputs.three.is_high()),
+        ];
+        for &(gpio, raw) in &initial_raw_states {
+            if controller.has_gpio(gpio) {
+                let _ = controller.initialize(gpio, raw, 0);
+            }
+        }
+
+        let mut now_ms = 0_u64;
         loop {
             let raw_states = [
-                inputs.one.is_high(),
-                inputs.two.is_high(),
-                inputs.three.is_high(),
+                (2, inputs.one.is_high()),
+                (3, inputs.two.is_high()),
+                (4, inputs.three.is_high()),
             ];
-            for (index, &raw) in raw_states.iter().enumerate() {
-                let binding = DEFAULT_CONFIG.inputs[index];
-                let active = if binding.active_high { raw } else { !raw };
-                if states[index].update(active, binding.debounce_ms) {
-                    EVENTS
-                        .send(OutboundEvent {
-                            channel: binding.channel,
-                            event_type: binding.event_type,
-                            function: binding.function,
-                        })
-                        .await;
+            for &(gpio, raw) in &raw_states {
+                if !controller.has_gpio(gpio) {
+                    continue;
+                }
+                let result = match controller.update(gpio, raw, now_ms) {
+                    Ok(result) => result,
+                    Err(_) => continue,
+                };
+                for action in result.actions {
+                    ACTION_EVENTS.send(action).await;
                 }
             }
             Timer::after_millis(10).await;
+            now_ms = now_ms.saturating_add(10);
         }
     }
 
-    #[derive(Clone, Copy)]
-    struct DebounceState {
-        stable: bool,
-        last: bool,
-        ticks: u16,
-    }
+    #[embassy_executor::task]
+    async fn event_sender_task(
+        mut socket: UdpSocket<'static>,
+        hub: IpEndpoint,
+        boot_id: u64,
+        config: &'static PersistedNodeConfig,
+    ) -> ! {
+        let mut protocol = NodeUdpProtocol::new(config.device_id.as_str(), boot_id)
+            .expect("invalid device ID configuration");
+        let mut tx = [0; 512];
+        let mut rx = [0; 512];
 
-    impl DebounceState {
-        const fn new() -> Self {
-            Self {
-                stable: false,
-                last: false,
-                ticks: 0,
+        loop {
+            let action = ACTION_EVENTS.receive().await;
+            let event = match protocol.event_from_action(action) {
+                Ok(event) => event,
+                Err(_) => {
+                    warn!("unable to allocate EVENT ID");
+                    continue;
+                }
+            };
+            let used = match protocol.encode_message(event.message(), &mut tx) {
+                Ok(used) => used,
+                Err(_) => {
+                    warn!("EVENT JSON buffer too small");
+                    continue;
+                }
+            };
+
+            let mut delivered = false;
+            let mut retry_policy = RetryPolicy::new(config.event_retry_count);
+            while let Some(attempt) = retry_policy.next_attempt() {
+                if socket.send_to(&tx[..used], hub).await.is_err() {
+                    warn!("EVENT send failed");
+                    continue;
+                }
+
+                let deadline = Instant::now() + Duration::from_millis(config.ack_timeout_ms as u64);
+                if wait_for_ack(&mut socket, &protocol, &event, &mut rx, deadline).await {
+                    info!("EVENT delivered (attempt {})", attempt);
+                    delivered = true;
+                    break;
+                }
+            }
+            if !delivered {
+                warn!("EVENT delivery failed after retries");
             }
         }
+    }
 
-        fn update(&mut self, active: bool, debounce_ms: u16) -> bool {
-            if active != self.last {
-                self.last = active;
-                self.ticks = 0;
-                return false;
+    async fn wait_for_ack(
+        socket: &mut UdpSocket<'static>,
+        protocol: &NodeUdpProtocol,
+        event: &PendingEvent,
+        rx: &mut [u8],
+        deadline: Instant,
+    ) -> bool {
+        loop {
+            let received = with_deadline(deadline, socket.recv_from(rx)).await;
+            match received {
+                Ok(Ok((len, _))) if protocol.ack_matches(event, &rx[..len]) => return true,
+                Ok(Ok(_)) | Ok(Err(_)) => {
+                    if Instant::now() >= deadline {
+                        return false;
+                    }
+                }
+                Err(_) => return false,
             }
+        }
+    }
 
-            self.ticks = self.ticks.saturating_add(10);
-            if self.ticks < debounce_ms || self.stable == active {
-                return false;
+    #[embassy_executor::task]
+    async fn usb_device_task(
+        mut usb: UsbDevice<'static, embassy_rp::usb::Driver<'static, USB>>,
+    ) -> ! {
+        usb.run().await
+    }
+
+    #[embassy_executor::task]
+    async fn cdc_task(
+        mut class: CdcAcmClass<'static, embassy_rp::usb::Driver<'static, USB>>,
+        mut handler: FirmwareCdcHandler,
+        mut watchdog: embassy_rp::watchdog::Watchdog,
+    ) -> ! {
+        let mut parser = CdcLineParser::new();
+        let mut packet = [0_u8; 64];
+        let mut response = [0_u8; MAX_CDC_LINE_SIZE];
+        loop {
+            class.wait_connection().await;
+            loop {
+                let length = match class.read_packet(&mut packet).await {
+                    Ok(length) => length,
+                    Err(_) => {
+                        parser = CdcLineParser::new();
+                        break;
+                    }
+                };
+                let _ = parser.feed(&packet[..length]);
+                while let Some(line) = parser.pop_line() {
+                    let result = match handler.handle_line(line.as_slice(), &mut response) {
+                        Ok(result) => result,
+                        Err(_) => continue,
+                    };
+                    let mut offset = 0;
+                    let max_packet_size = class.max_packet_size() as usize;
+                    while offset < result.response_len {
+                        let end = core::cmp::min(offset + max_packet_size, result.response_len);
+                        if class.write_packet(&response[offset..end]).await.is_err() {
+                            break;
+                        }
+                        offset = end;
+                    }
+                    if result.response_len % max_packet_size == 0 {
+                        let _ = class.write_packet(&[]).await;
+                    }
+                    if result.action == CdcAction::Reboot {
+                        watchdog.trigger_reset();
+                        loop {
+                            core::hint::spin_loop();
+                        }
+                    }
+                }
             }
-            self.stable = active;
-            active
         }
     }
 
@@ -129,7 +305,40 @@ mod firmware {
     async fn main(spawner: Spawner) {
         info!("Uchi Pulse Node {}", DEFAULT_CONFIG.device_id);
         let p = embassy_rp::init(Default::default());
+        let defaults = PersistedNodeConfig::from_node_config(&DEFAULT_CONFIG)
+            .expect("invalid built-in node configuration");
+        let config_manager = ConfigManager::new(
+            FlashConfigStorage::new(Flash::new_blocking(p.FLASH)),
+            defaults,
+        );
+        let cdc_handler = CdcCommandHandler::new(config_manager);
+        let runtime_config = RUNTIME_CONFIG.init(cdc_handler.config().clone());
+        let usb_driver = embassy_rp::usb::Driver::new(p.USB, Irqs);
+        let mut usb_config = embassy_usb::Config::new(0x1209, 0x5543);
+        usb_config.manufacturer = Some("Uchi-Pulse");
+        usb_config.product = Some("Uchi-Pulse Node");
+        usb_config.serial_number = Some(DEFAULT_CONFIG.device_id);
+        let mut usb_builder = Builder::new(
+            usb_driver,
+            usb_config,
+            USB_CONFIG_DESCRIPTOR.init([0; 256]),
+            USB_BOS_DESCRIPTOR.init([0; 256]),
+            USB_MSOS_DESCRIPTOR.init([0; 256]),
+            USB_CONTROL_BUFFER.init([0; 64]),
+        );
+        let cdc_class = CdcAcmClass::new(&mut usb_builder, CDC_STATE.init(CdcState::new()), 64);
+        let usb_device = usb_builder.build();
+        spawner.spawn(usb_device_task(usb_device).unwrap());
+        spawner.spawn(
+            cdc_task(
+                cdc_class,
+                cdc_handler,
+                embassy_rp::watchdog::Watchdog::new(p.WATCHDOG),
+            )
+            .unwrap(),
+        );
         let mut rng = RoscRng;
+        let boot_id = rng.next_u64();
 
         let firmware = aligned_bytes!("../../firmware/43439A0.bin");
         let clm = aligned_bytes!("../../firmware/43439A0_clm.bin");
@@ -192,7 +401,7 @@ mod firmware {
             two: Input::new(p.PIN_3, Pull::Up),
             three: Input::new(p.PIN_4, Pull::Up),
         };
-        spawner.spawn(input_task(inputs).unwrap());
+        spawner.spawn(input_task(inputs, runtime_config).unwrap());
 
         let mut rx_buffer = [0; 512];
         let mut tx_buffer = [0; 512];
@@ -217,99 +426,33 @@ mod firmware {
             DEFAULT_CONFIG.hub_port,
         );
 
-        let mut hello = [0; 256];
-        let hello_len = protocol::encode_hello(
-            &mut hello,
-            DEFAULT_CONFIG.device_id,
-            next_message_id(),
-            DEFAULT_CONFIG.name,
-            DEFAULT_CONFIG.firmware_version,
-        )
-        .unwrap();
-        let _ = socket.send_to(&hello[..hello_len], hub).await;
+        let event_socket = UdpSocket::new(
+            stack,
+            EVENT_RX_METADATA.init([PacketMetadata::EMPTY; 4]),
+            EVENT_RX_BUFFER.init([0; 512]),
+            EVENT_TX_METADATA.init([PacketMetadata::EMPTY; 4]),
+            EVENT_TX_BUFFER.init([0; 512]),
+        );
+        let mut event_socket = event_socket;
+        event_socket.bind(0).unwrap();
+        spawner.spawn(event_sender_task(event_socket, hub, boot_id, runtime_config).unwrap());
 
-        let mut next_heartbeat_ms = DEFAULT_CONFIG.heartbeat_interval_sec * 1_000;
-        let mut tx = [0; 256];
-        let mut rx = [0; 256];
+        let protocol = NodeUdpProtocol::new(runtime_config.device_id.as_str(), boot_id)
+            .expect("invalid device ID configuration");
+        let mut tx = [0; 512];
+        let hello = protocol.hello();
+        let hello_len = protocol
+            .encode_message(&hello, &mut tx)
+            .expect("HELLO JSON buffer too small");
+        let _ = socket.send_to(&tx[..hello_len], hub).await;
+
         loop {
-            if let Ok(event) = EVENTS.try_receive() {
-                let id = next_message_id();
-                let len = protocol::encode_event(
-                    &mut tx,
-                    DEFAULT_CONFIG.device_id,
-                    id,
-                    event.event_type,
-                    event.channel,
-                    event_value(event.function),
-                )
-                .unwrap_or_else(|_| {
-                    error!("EVENT JSON buffer too small");
-                    0
-                });
-                if len > 0 {
-                    send_event_with_retry(&mut socket, hub, &tx[..len], id, &mut rx).await;
-                }
-            }
-
-            if next_heartbeat_ms <= 10 {
-                let id = next_message_id();
-                let len =
-                    protocol::encode_heartbeat(&mut tx, DEFAULT_CONFIG.device_id, id).unwrap();
-                let _ = socket.send_to(&tx[..len], hub).await;
-                next_heartbeat_ms = DEFAULT_CONFIG.heartbeat_interval_sec * 1_000;
-            } else {
-                next_heartbeat_ms -= 10;
-            }
-            Timer::after_millis(10).await;
-        }
-    }
-
-    async fn send_event_with_retry<'a>(
-        socket: &mut UdpSocket<'a>,
-        hub: IpEndpoint,
-        payload: &[u8],
-        message_id: MessageId,
-        rx: &mut [u8],
-    ) {
-        for attempt in 0..=DEFAULT_CONFIG.event_retry_count {
-            if socket.send_to(payload, hub).await.is_err() {
-                warn!("EVENT send failed");
-            }
-            match with_timeout(
-                Duration::from_millis(DEFAULT_CONFIG.ack_timeout_ms as u64),
-                socket.recv_from(rx),
-            )
-            .await
-            {
-                Ok(Ok((len, _)))
-                    if protocol::decode_ack(&rx[..len])
-                        .is_some_and(|ack| ack.message_id == message_id) =>
-                {
-                    info!("EVENT ACK {} (attempt {})", message_id, attempt + 1);
-                    return;
-                }
-                _ => {}
-            }
-        }
-        warn!("EVENT {} delivery failed after retries", message_id);
-    }
-
-    fn next_message_id() -> MessageId {
-        NEXT_MESSAGE_ID.fetch_add(1, Ordering::Relaxed)
-    }
-
-    fn event_value(function: InputFunction) -> i32 {
-        match function {
-            InputFunction::MealReady => 1,
-            InputFunction::Call => 1,
-            InputFunction::Busy => 1,
-            InputFunction::BusyClear => 0,
-            InputFunction::EntryRequest => 1,
-            InputFunction::EntryOk => 1,
-            InputFunction::EntryLater => 1,
-            InputFunction::EntryNg => 0,
-            InputFunction::MailDetected => 1,
-            InputFunction::MailCleared => 0,
+            Timer::after_secs(runtime_config.heartbeat_interval_sec.into()).await;
+            let heartbeat = protocol.heartbeat();
+            let heartbeat_len = protocol
+                .encode_message(&heartbeat, &mut tx)
+                .expect("HEARTBEAT JSON buffer too small");
+            let _ = socket.send_to(&tx[..heartbeat_len], hub).await;
         }
     }
 }

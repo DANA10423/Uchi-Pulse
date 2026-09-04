@@ -22,6 +22,7 @@ firmware = [
     "dep:embassy-rp",
     "dep:embassy-sync",
     "dep:embassy-time",
+    "dep:embassy-usb",
     "dep:panic-probe",
     "dep:portable-atomic",
     "dep:static_cell",
@@ -36,7 +37,8 @@ path = "src/bin/uchi-pulse-node.rs"
 required-features = ["firmware"]
 
 [dependencies]
-heapless = { version = "0.9", default-features = false }
+uchi-pulse-common = { path = "../../crates/uchi-pulse-common" }
+heapless = { version = "0.9", default-features = false, features = ["serde"] }
 serde = { version = "1.0.203", default-features = false, features = ["derive"] }
 serde-json-core = "0.5.1"
 
@@ -50,6 +52,7 @@ embassy-net = { version = "0.9.1", features = ["defmt", "udp", "dhcpv4", "medium
 embassy-rp = { version = "0.10.0", default-features = false, features = ["defmt", "time-driver", "critical-section-impl", "executor-thread", "executor-interrupt"], optional = true }
 embassy-sync = { version = "0.8.0", features = ["defmt"], optional = true }
 embassy-time = { version = "0.5.1", features = ["defmt", "defmt-timestamp-uptime"], optional = true }
+embassy-usb = { version = "0.6.0", features = ["defmt"], optional = true }
 panic-probe = { version = "1.0.0", features = ["print-defmt"], optional = true }
 portable-atomic = { version = "1.5", features = ["critical-section"], optional = true }
 static_cell = { version = "2.1", optional = true }

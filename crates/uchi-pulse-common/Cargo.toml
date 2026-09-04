@@ -1,0 +1,12 @@
+[package]
+name = "uchi-pulse-common"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Shared Uchi Pulse protocol and data model types"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+heapless = { version = "0.9", default-features = false, features = ["serde"] }
+serde = { version = "1.0.203", default-features = false, features = ["derive"] }
+serde-json-core = "0.5.1"

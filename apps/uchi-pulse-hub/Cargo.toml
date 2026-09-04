@@ -7,6 +7,6 @@ description = "Uchi Pulse Hub UDP server for Raspberry Pi Zero and Zero 2 W"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+uchi-pulse-common = { path = "../../crates/uchi-pulse-common" }
+rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1.0.203", features = ["derive"] }
-serde_json = "1.0.145"
-

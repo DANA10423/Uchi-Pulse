@@ -1,14 +1,19 @@
 # uchi-pulse-node
 
 Uchi Pulse の Raspberry Pi Pico W / Pico 2 W 向け子機ファームウェアです。
-`docs/parent_child_udp_communication_spec.md` の UDP/JSON 仕様に合わせ、次を実装しています。
+PHASE 6/7/8では、GPIO入力から共通Input Eventを判定し、設定されたAction IDを正式なUDP EVENTとして親機へ送信します。また、USB CDCで子機設定を取得・保存できます。
 
-- 起動時の `HELLO`
-- 3 分間隔の `HEARTBEAT`
-- GPIO入力を論理チャンネルへ変換した `EVENT`
-- `EVENT` の ACK 待ち（3秒）と最大3回再送
-- `device_id + message_id` による ACK 照合
-- 設定可能な Hub アドレス、Wi-Fi、GPIO論理割り当ての定義
+- デバウンス付きGPIO入力変化検出
+- `OFF_TO_ON` / `ON_TO_OFF` / `CLICK` / `DOUBLE_CLICK` / `LONG_PRESS`
+- `GPIO + Input Event -> Action ID` のデータ駆動マッピング
+- ホスト上でテスト可能な入力ロジックとUDPプロトコル処理
+- `boot_id + sequence` によるEVENT識別子
+- EVENT ACK待機（60秒）と同一EVENTの最大3回再送
+- 180秒間隔のHEARTBEAT
+- USB CDCのLF区切りJSON（`get_config` / `set_config` / `factory_reset` / `reboot`）
+- 設定のvalidation、Flash保存、次回起動時の復元
+
+UDPは正式な共通wire formatを使用します。GPIO番号、Input Event、Actionの業務的意味はUDPへ含めません。
 
 ## ビルド
 
@@ -28,16 +33,17 @@ BOOTSEL/UF2 書き込みを使う場合は生成された ELF を `elf2uf2-rs` �
 
 ## 現在の設定方式
 
-GPIO・Wi-Fi・Hub設定は、初期実装では `src/config.rs` のコンパイル時設定です。
-設計書で定義されている USB CDC 初期設定は、次の拡張ポイントとして残しています。
-通信フォーマットは `src/protocol.rs` に分離しているため、USB CDC の設定保存を追加しても
-UDP通信層を変更せずに対応できます。
+Wi-Fi・Hub接続先は現時点では `src/config.rs` のコンパイル時設定です。GPIO・Input Mapping・
+ジェスチャー時間・UDP送信タイミングはUSB CDCから変更でき、最終4 KiBの設定保存領域へ保存されます。
+保存設定は次回起動時に反映されます。Input Mappingには業務名を持たせず、Action IDだけを保持します。
+
+設定保存領域は2 MiBイメージの最終4 KiBを使用し、リンカースクリプトからコード領域を除外しています。
+Pico W / Pico 2 WのFlash HALアダプタは `src/storage.rs` の共通ストレージ抽象化へ接続されます。
 
 ## テスト
 
-通信JSONはホスト上でテストできます。
+入力判定とUDP JSON/ACK相関はホスト上でテストできます。
 
 ```sh
 cargo test -p uchi-pulse-node
 ```
-
