@@ -45,6 +45,7 @@ mod firmware {
 
     const FLASH_SIZE: usize = 2 * 1024 * 1024;
     const CONFIG_STORAGE_OFFSET: u32 = (FLASH_SIZE - CONFIG_STORAGE_SIZE) as u32;
+    const AVAILABLE_GPIO_COUNT: usize = 26;
     type NodeFlash = Flash<'static, FLASH, Blocking, FLASH_SIZE>;
     type FirmwareCdcHandler = CdcCommandHandler<FlashConfigStorage>;
 
@@ -123,6 +124,15 @@ mod firmware {
         runner.run().await
     }
 
+    struct GpioInputPin {
+        gpio: u8,
+        input: Input<'static>,
+    }
+
+    struct InputSet {
+        pins: [GpioInputPin; AVAILABLE_GPIO_COUNT],
+    }
+
     #[embassy_executor::task]
     async fn input_task(inputs: InputSet, config: &'static PersistedNodeConfig) -> ! {
         let mut controller = match InputController::new(config.input_config()) {
@@ -131,29 +141,19 @@ mod firmware {
                 Timer::after_secs(1).await;
             },
         };
-        let initial_raw_states = [
-            (2, inputs.one.is_high()),
-            (3, inputs.two.is_high()),
-            (4, inputs.three.is_high()),
-        ];
-        for &(gpio, raw) in &initial_raw_states {
-            if controller.has_gpio(gpio) {
-                let _ = controller.initialize(gpio, raw, 0);
+        for pin in &inputs.pins {
+            if controller.has_gpio(pin.gpio) {
+                let _ = controller.initialize(pin.gpio, pin.input.is_high(), 0);
             }
         }
 
         let mut now_ms = 0_u64;
         loop {
-            let raw_states = [
-                (2, inputs.one.is_high()),
-                (3, inputs.two.is_high()),
-                (4, inputs.three.is_high()),
-            ];
-            for &(gpio, raw) in &raw_states {
-                if !controller.has_gpio(gpio) {
+            for pin in &inputs.pins {
+                if !controller.has_gpio(pin.gpio) {
                     continue;
                 }
-                let result = match controller.update(gpio, raw, now_ms) {
+                let result = match controller.update(pin.gpio, pin.input.is_high(), now_ms) {
                     Ok(result) => result,
                     Err(_) => continue,
                 };
@@ -292,12 +292,6 @@ mod firmware {
         }
     }
 
-    struct InputSet {
-        one: Input<'static>,
-        two: Input<'static>,
-        three: Input<'static>,
-    }
-
     #[embassy_executor::main(
         executor = "embassy_rp::executor::Executor",
         entry = "cortex_m_rt::entry"
@@ -397,9 +391,34 @@ mod firmware {
         info!("Wi-Fi ready");
 
         let inputs = InputSet {
-            one: Input::new(p.PIN_2, Pull::Up),
-            two: Input::new(p.PIN_3, Pull::Up),
-            three: Input::new(p.PIN_4, Pull::Up),
+            pins: [
+                GpioInputPin { gpio: 0, input: Input::new(p.PIN_0, Pull::Up) },
+                GpioInputPin { gpio: 1, input: Input::new(p.PIN_1, Pull::Up) },
+                GpioInputPin { gpio: 2, input: Input::new(p.PIN_2, Pull::Up) },
+                GpioInputPin { gpio: 3, input: Input::new(p.PIN_3, Pull::Up) },
+                GpioInputPin { gpio: 4, input: Input::new(p.PIN_4, Pull::Up) },
+                GpioInputPin { gpio: 5, input: Input::new(p.PIN_5, Pull::Up) },
+                GpioInputPin { gpio: 6, input: Input::new(p.PIN_6, Pull::Up) },
+                GpioInputPin { gpio: 7, input: Input::new(p.PIN_7, Pull::Up) },
+                GpioInputPin { gpio: 8, input: Input::new(p.PIN_8, Pull::Up) },
+                GpioInputPin { gpio: 9, input: Input::new(p.PIN_9, Pull::Up) },
+                GpioInputPin { gpio: 10, input: Input::new(p.PIN_10, Pull::Up) },
+                GpioInputPin { gpio: 11, input: Input::new(p.PIN_11, Pull::Up) },
+                GpioInputPin { gpio: 12, input: Input::new(p.PIN_12, Pull::Up) },
+                GpioInputPin { gpio: 13, input: Input::new(p.PIN_13, Pull::Up) },
+                GpioInputPin { gpio: 14, input: Input::new(p.PIN_14, Pull::Up) },
+                GpioInputPin { gpio: 15, input: Input::new(p.PIN_15, Pull::Up) },
+                GpioInputPin { gpio: 16, input: Input::new(p.PIN_16, Pull::Up) },
+                GpioInputPin { gpio: 17, input: Input::new(p.PIN_17, Pull::Up) },
+                GpioInputPin { gpio: 18, input: Input::new(p.PIN_18, Pull::Up) },
+                GpioInputPin { gpio: 19, input: Input::new(p.PIN_19, Pull::Up) },
+                GpioInputPin { gpio: 20, input: Input::new(p.PIN_20, Pull::Up) },
+                GpioInputPin { gpio: 21, input: Input::new(p.PIN_21, Pull::Up) },
+                GpioInputPin { gpio: 22, input: Input::new(p.PIN_22, Pull::Up) },
+                GpioInputPin { gpio: 26, input: Input::new(p.PIN_26, Pull::Up) },
+                GpioInputPin { gpio: 27, input: Input::new(p.PIN_27, Pull::Up) },
+                GpioInputPin { gpio: 28, input: Input::new(p.PIN_28, Pull::Up) },
+            ],
         };
         spawner.spawn(input_task(inputs, runtime_config).unwrap());
 
