@@ -11,8 +11,13 @@ use uchi_pulse_common::{
     DeviceId, InputEvent,
 };
 
-pub const SUPPORTED_GPIO_PINS: &[u8] = &[2, 3, 4];
-pub const MAX_PERSISTED_GPIO_INPUTS: usize = 3;
+/// GPIOs exposed on Raspberry Pi Pico W / Pico 2 W headers and available to
+/// Uchi-Pulse input configuration. GPIO 23, 24, 25 and 29 are reserved for the
+/// onboard CYW43 Wi-Fi interface and are intentionally excluded.
+pub const SUPPORTED_GPIO_PINS: &[u8] = &[
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 26, 27, 28,
+];
+pub const MAX_PERSISTED_GPIO_INPUTS: usize = 10;
 pub const MAX_PERSISTED_INPUT_MAPPINGS: usize = 32;
 
 /// Physical properties of one GPIO input.
@@ -327,5 +332,33 @@ mod tests {
         assert!(config.validate().is_ok());
         assert_eq!(config.input_mappings[1].action_id, 20);
         assert!(!config.input_mappings[1].enabled);
+    }
+
+    #[test]
+    fn validation_accepts_all_exposed_gpio_numbers() {
+        let mut config = PersistedNodeConfig::defaults();
+        config.gpio_inputs.clear();
+        for &gpio in &[0, 1, 5, 9, 13, 17, 21, 26, 27, 28] {
+            config
+                .gpio_inputs
+                .push(GpioInputConfig {
+                    gpio,
+                    active_high: false,
+                    debounce_ms: 30,
+                })
+                .unwrap();
+        }
+        assert_eq!(config.gpio_inputs.len(), MAX_PERSISTED_GPIO_INPUTS);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validation_rejects_reserved_wifi_gpio() {
+        let mut config = PersistedNodeConfig::defaults();
+        config.gpio_inputs[0].gpio = 23;
+        assert_eq!(
+            config.validate(),
+            Err(ConfigValidationError::UnsupportedGpio(23))
+        );
     }
 }
