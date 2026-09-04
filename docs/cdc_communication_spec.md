@@ -13,7 +13,7 @@
 - 親機: Raspberry Pi Zero W / Zero 2 W
 - 子機: Raspberry Pi Pico W / Pico 2 W
 
-通信プロトコルの基本形式は共通化するが、設定内容は親機と子機で異なる。両者の設定項目を混在させない。
+通信プロトコルの基本形式は共通化するが、設定内容は親機と子機で異なる。
 
 ---
 
@@ -24,25 +24,6 @@
 - 1メッセージ1行、LF (`\n`) 終端とする。
 - 原則として要求・応答型とする。
 - 初期プロトコルバージョンは `1` とする。
-- UDP EVENTで使用するACK、再送、重複排除はCDCでは使用しない。
-
-基本要求:
-
-```json
-{"version":1,"command":"get_status"}
-```
-
-成功応答:
-
-```json
-{"version":1,"result":"ok","data":{}}
-```
-
-エラー応答:
-
-```json
-{"version":1,"result":"error","error":{"code":"INVALID_PARAMETER","message":"invalid parameter"}}
-```
 
 ---
 
@@ -59,8 +40,6 @@
 | `reboot` | 再起動 |
 | `factory_reset` | 保存設定初期化 |
 
-コマンド名は共通とするが、`get_config` / `set_config` のデータ内容は親機と子機で異なる。
-
 ---
 
 ## 5. 子機CDC設定
@@ -69,21 +48,54 @@
 
 子機CDCでは、GPIO入力からどのAction IDを発生させるかを設定する。
 
-ボタン、スイッチ、ポスト投函センサー等の物理用途による区別は行わず、GPIOデジタル入力のエッジとして扱う。
+入力条件は `Edge` ではなく、より一般化した `Input Event` として扱う。
 
-### 5.2 Action入力割当
+### 5.2 Input Event
+
+初期版では以下を定義する。
+
+- `OFF_TO_ON`
+- `ON_TO_OFF`
+- `CLICK`
+- `DOUBLE_CLICK`
+- `LONG_PRESS`
+
+`OFF_TO_ON` / `ON_TO_OFF` はGPIO状態変化を表す。
+
+`CLICK` / `DOUBLE_CLICK` / `LONG_PRESS` は子機が入力状態と時間を基に判定する論理イベントである。
+
+### 5.3 Action入力割当
 
 1つの入力割当は次の3項目から構成する。
 
 | 項目 | 内容 |
 |---|---|
 | `gpio` | GPIO番号 |
-| `edge` | `OFF_TO_ON` / `ON_TO_OFF` |
+| `input_event` | Input Event |
 | `action_id` | 発生させるAction ID |
 
-同じGPIOについて `OFF_TO_ON` と `ON_TO_OFF` に別のAction IDを設定できる。
+例:
 
-### 5.3 子機CDCで設定しない情報
+```json
+{
+  "gpio": 5,
+  "input_event": "DOUBLE_CLICK",
+  "action_id": 11
+}
+```
+
+同一GPIOの異なるInput Eventに別Action IDを設定できる。
+
+### 5.4 操作判定設定
+
+`CLICK` / `DOUBLE_CLICK` / `LONG_PRESS` を判定するため、子機設定には少なくとも以下の時間パラメータを持てる構造とする。
+
+- ダブルクリック判定時間
+- 長押し判定時間
+
+具体的な設定フィールド名、単位、デフォルト値は詳細設計で確定する。
+
+### 5.5 子機CDCで設定しない情報
 
 以下は親機側の情報であり、子機へ設定しない。
 
@@ -103,13 +115,9 @@
 
 ## 6. 親機CDC設定
 
-### 6.1 責務
-
 親機CDCでは、親機DBに保持するAction定義や関連設定を管理対象とする。
 
-### 6.2 Action定義
-
-親機側ではAction IDごとに次の情報を管理する。
+Action定義はAction IDごとに以下を保持する。
 
 - `action_name`
 - `target_type` (`FAMILY` / `COMMON`)
@@ -119,42 +127,9 @@
 - `state_value`
 - `enabled`
 
-`FAMILY` Actionでは `target_family_id` を必須とし、対象家族ごとに別Action IDを登録する。
-
-同じAction内容でも対象家族が異なる場合は別Action IDとする。
-
-```text
-Action ID 4 = 父 / 入室NG
-Action ID 5 = 母 / 入室NG
-```
-
-1つのAction IDに複数の対象家族は登録しない。
-
-`COMMON` Actionでは `target_family_id = NULL` とする。
-
-Web表示メッセージにはデフォルト値を用意し、親機CDCで変更可能とする。
-
-### 6.3 家族情報
-
-対象者の表示名はActionに直接保存せず、家族マスタで管理する。
-
-- `family_id`
-- `display_name`
-- `enabled`
-
-FAMILY Actionは `target_family_id` で家族マスタを参照する。
-
-### 6.4 通知設定
+`FAMILY` Actionでは対象家族ごとに別Action IDを登録する。`COMMON` Actionでは `target_family_id = NULL` とする。
 
 スマートフォン通知設定はAction定義とは分離する。
-
-- 対象Action ID
-- 通知有無
-- 通知先 `family_id`
-
-Actionの対象家族とスマートフォン通知先家族は別概念とする。
-
-LINE / Slack等の実送信先情報もActionには含めず、家族に紐づく通知先設定として管理する。
 
 ---
 
@@ -163,7 +138,7 @@ LINE / Slack等の実送信先情報もActionには含めず、家族に紐づ�
 ```text
 [子機 CDC]
 GPIO
- + Edge
+ + Input Event
  + Action ID
       ↓
 通常運用時にUDP EVENTとしてAction ID送信
@@ -180,11 +155,9 @@ Action定義
  + 状態変更
       ↓
 通知設定
- + 通知有無
- + 通知先家族
 ```
 
-この境界を維持し、親機用設定を子機設定データへ含めない。また子機のGPIO割当を親機Action定義へ含めない。
+Input Eventの判定は子機で完了し、親機やUDP層へInput Eventそのものを送る必要はない。
 
 ---
 
@@ -209,7 +182,7 @@ Action定義
 - `OPERATION_FAILED`
 - `NOT_SUPPORTED`
 
-親機では `target_type` と `target_family_id` の整合性も設定検証対象とする。子機ではGPIO番号、`edge`、Action IDの形式等を検証対象とする。
+子機ではGPIO番号、`input_event`、Action ID、操作判定時間設定等を検証対象とする。
 
 ---
 
@@ -218,5 +191,3 @@ Action定義
 - `docs/home_yuru_communication_design.md`
 - `docs/parent_child_udp_communication_spec.md`
 - `docs/parent-database-design.md`
-
-Action IDはAction定義ごとに一意に割り当て、FAMILY Actionは対象家族ごとに別Action IDとする。
