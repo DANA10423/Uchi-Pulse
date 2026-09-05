@@ -6,6 +6,10 @@ use eframe::egui::{self, Color32, RichText, TextEdit, TextStyle};
 use serde_json::{Value, json};
 use uchi_pulse_common::cdc::CdcStatus;
 
+use uchi_pulse_control::db::{
+    ActionRecord, DeviceRecord, EventRecord, FamilyRecord, NotificationDestinationRecord,
+    SqliteDatabase, StateChangeRecord,
+};
 use uchi_pulse_control::protocol::{
     WorkerCommand, WorkerEvent, build_request, parse_response, spawn_serial_worker,
 };
@@ -27,6 +31,7 @@ const HUB_COMMANDS: &[(&str, &str)] = &[
 enum EndpointKind {
     Node,
     Hub,
+    Database,
 }
 
 impl EndpointKind {
@@ -34,6 +39,7 @@ impl EndpointKind {
         match self {
             Self::Node => "子機",
             Self::Hub => "親機",
+            Self::Database => "SQLite",
         }
     }
 
@@ -41,6 +47,7 @@ impl EndpointKind {
         match self {
             Self::Node => COMMANDS,
             Self::Hub => HUB_COMMANDS,
+            Self::Database => &[],
         }
     }
 }
@@ -76,6 +83,7 @@ impl ConfirmationAction {
             (Self::FactoryReset, _) => "設定を初期化しますか？",
             (Self::Reboot, EndpointKind::Node) => "子機を再起動しますか？",
             (Self::Reboot, EndpointKind::Hub) => "親機の再起動要求を送信しますか？",
+            (Self::Reboot, EndpointKind::Database) => "",
         }
     }
 }
@@ -91,6 +99,45 @@ struct ControlApp {
     font_info: String,
     request_number: u64,
     confirmation: Option<ConfirmationAction>,
+    database_path: String,
+    database: Option<SqliteDatabase>,
+    database_section: DatabaseSection,
+    devices: Vec<DeviceRecord>,
+    families: Vec<FamilyRecord>,
+    actions: Vec<ActionRecord>,
+    notification_destinations: Vec<NotificationDestinationRecord>,
+    events: Vec<EventRecord>,
+    selected_device: Option<String>,
+    selected_family: Option<u32>,
+    selected_action: Option<u32>,
+    selected_notification_destination: Option<i64>,
+    device_form: DeviceRecord,
+    family_form: FamilyRecord,
+    action_form: ActionRecord,
+    notification_destination_form: NotificationDestinationRecord,
+    state_type_input: String,
+    state_value_input: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DatabaseSection {
+    Devices,
+    Families,
+    Actions,
+    Destinations,
+    Events,
+}
+
+impl DatabaseSection {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Devices => "子機",
+            Self::Families => "家族",
+            Self::Actions => "Action",
+            Self::Destinations => "通知先",
+            Self::Events => "履歴",
+        }
+    }
 }
 
 impl ControlApp {
@@ -107,6 +154,28 @@ impl ControlApp {
             font_info: "日本語フォントを検索中…".to_owned(),
             request_number: 0,
             confirmation: None,
+            database_path: "./uchi-pulse.db".to_owned(),
+            database: None,
+            database_section: DatabaseSection::Devices,
+            devices: Vec::new(),
+            families: Vec::new(),
+            actions: Vec::new(),
+            notification_destinations: Vec::new(),
+            events: Vec::new(),
+            selected_device: None,
+            selected_family: None,
+            selected_action: None,
+            selected_notification_destination: None,
+            device_form: DeviceRecord::default(),
+            family_form: FamilyRecord::default(),
+            action_form: ActionRecord::default(),
+            notification_destination_form: NotificationDestinationRecord {
+                notification_type: "LINE".to_owned(),
+                enabled: true,
+                ..NotificationDestinationRecord::default()
+            },
+            state_type_input: "MEAL_NOTICE".to_owned(),
+            state_value_input: "ON".to_owned(),
         };
         app.font_info = install_japanese_font(&context.egui_ctx)
             .map(|path| format!("日本語フォント: {path}"))
@@ -190,8 +259,249 @@ impl ControlApp {
         self.config_text = match endpoint {
             EndpointKind::Node => default_config_text(),
             EndpointKind::Hub => default_hub_config_text(),
+            EndpointKind::Database => String::new(),
         };
         self.status = format!("{}用の設定画面に切り替えました", endpoint.label());
+    }
+
+    fn open_database(&mut self) {
+        let path = self.database_path.trim();
+        if path.is_empty() {
+            self.status = "SQLite DBファイルのパスを入力してください".to_owned();
+            return;
+        }
+        match SqliteDatabase::open(path) {
+            Ok(database) => {
+                self.database = Some(database);
+                self.status = format!("SQLiteを開きました: {path}");
+                self.refresh_database_data();
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn close_database(&mut self) {
+        self.database = None;
+        self.devices.clear();
+        self.families.clear();
+        self.actions.clear();
+        self.notification_destinations.clear();
+        self.events.clear();
+        self.status = "SQLiteを閉じました".to_owned();
+    }
+
+    fn refresh_database_data(&mut self) {
+        let Some(database) = self.database.as_ref() else {
+            self.status = "先にSQLiteを開いてください".to_owned();
+            return;
+        };
+        let devices = database.list_devices();
+        let families = database.list_families();
+        let actions = database.list_actions();
+        let notification_destinations = database.list_notification_destinations();
+        let events = database.list_events();
+        match (
+            devices,
+            families,
+            actions,
+            notification_destinations,
+            events,
+        ) {
+            (Ok(devices), Ok(families), Ok(actions), Ok(notification_destinations), Ok(events)) => {
+                self.devices = devices;
+                self.families = families;
+                self.actions = actions;
+                self.notification_destinations = notification_destinations;
+                self.events = events;
+                self.status = "SQLiteの設定を読み込みました".to_owned();
+            }
+            (Err(error), _, _, _, _)
+            | (_, Err(error), _, _, _)
+            | (_, _, Err(error), _, _)
+            | (_, _, _, Err(error), _)
+            | (_, _, _, _, Err(error)) => self.status = error,
+        }
+    }
+
+    fn select_database_section(&mut self, section: DatabaseSection) {
+        self.database_section = section;
+        self.selected_device = None;
+        self.selected_family = None;
+        self.selected_action = None;
+        self.selected_notification_destination = None;
+    }
+
+    fn new_device(&mut self) {
+        self.selected_device = None;
+        self.device_form = DeviceRecord {
+            device_type: "pico-w".to_owned(),
+            enabled: true,
+            ..DeviceRecord::default()
+        };
+    }
+
+    fn new_family(&mut self) {
+        self.selected_family = None;
+        self.family_form = FamilyRecord {
+            enabled: true,
+            ..FamilyRecord::default()
+        };
+    }
+
+    fn new_action(&mut self) {
+        self.selected_action = None;
+        self.action_form = ActionRecord {
+            target_type: "FAMILY".to_owned(),
+            enabled: true,
+            ..ActionRecord::default()
+        };
+        self.state_type_input = "MEAL_NOTICE".to_owned();
+        self.state_value_input = "ON".to_owned();
+    }
+
+    fn new_notification_destination(&mut self) {
+        self.selected_notification_destination = None;
+        self.notification_destination_form = NotificationDestinationRecord {
+            notification_type: "LINE".to_owned(),
+            enabled: true,
+            ..NotificationDestinationRecord::default()
+        };
+    }
+
+    fn save_device(&mut self) {
+        let Some(database) = self.database.as_ref() else {
+            self.status = "先にSQLiteを開いてください".to_owned();
+            return;
+        };
+        match database.save_device(&self.device_form) {
+            Ok(()) => {
+                self.status = "子機設定を保存しました".to_owned();
+                self.refresh_database_data();
+                self.selected_device = Some(self.device_form.device_id.clone());
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn delete_selected_device(&mut self) {
+        let Some(device_id) = self.selected_device.as_deref() else {
+            self.status = "削除する子機を選択してください".to_owned();
+            return;
+        };
+        let Some(database) = self.database.as_ref() else {
+            self.status = "先にSQLiteを開いてください".to_owned();
+            return;
+        };
+        match database.delete_device(device_id) {
+            Ok(()) => {
+                self.status = "子機設定を削除しました".to_owned();
+                self.new_device();
+                self.refresh_database_data();
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn save_family(&mut self) {
+        let Some(database) = self.database.as_ref() else {
+            self.status = "先にSQLiteを開いてください".to_owned();
+            return;
+        };
+        match database.save_family(&self.family_form) {
+            Ok(()) => {
+                self.status = "家族設定を保存しました".to_owned();
+                self.refresh_database_data();
+                self.selected_family = Some(self.family_form.family_id);
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn delete_selected_family(&mut self) {
+        let Some(family_id) = self.selected_family else {
+            self.status = "削除する家族を選択してください".to_owned();
+            return;
+        };
+        let Some(database) = self.database.as_ref() else {
+            self.status = "先にSQLiteを開いてください".to_owned();
+            return;
+        };
+        match database.delete_family(family_id) {
+            Ok(()) => {
+                self.status = "家族設定を削除しました".to_owned();
+                self.new_family();
+                self.refresh_database_data();
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn save_action(&mut self) {
+        let Some(database) = self.database.as_ref() else {
+            self.status = "先にSQLiteを開いてください".to_owned();
+            return;
+        };
+        match database.save_action(&self.action_form) {
+            Ok(()) => {
+                self.status = "Action設定を保存しました".to_owned();
+                self.refresh_database_data();
+                self.selected_action = Some(self.action_form.action_id);
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn delete_selected_action(&mut self) {
+        let Some(action_id) = self.selected_action else {
+            self.status = "削除するActionを選択してください".to_owned();
+            return;
+        };
+        let Some(database) = self.database.as_ref() else {
+            self.status = "先にSQLiteを開いてください".to_owned();
+            return;
+        };
+        match database.delete_action(action_id) {
+            Ok(()) => {
+                self.status = "Action設定を削除しました".to_owned();
+                self.new_action();
+                self.refresh_database_data();
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn save_notification_destination(&mut self) {
+        let Some(database) = self.database.as_ref() else {
+            self.status = "先にSQLiteを開いてください".to_owned();
+            return;
+        };
+        match database.save_notification_destination(&self.notification_destination_form) {
+            Ok(()) => {
+                self.status = "通知先を保存しました".to_owned();
+                self.refresh_database_data();
+                self.selected_notification_destination = self.notification_destination_form.id;
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
+    fn delete_selected_notification_destination(&mut self) {
+        let Some(id) = self.selected_notification_destination else {
+            self.status = "削除する通知先を選択してください".to_owned();
+            return;
+        };
+        let Some(database) = self.database.as_ref() else {
+            self.status = "先にSQLiteを開いてください".to_owned();
+            return;
+        };
+        match database.delete_notification_destination(id) {
+            Ok(()) => {
+                self.status = "通知先を削除しました".to_owned();
+                self.new_notification_destination();
+                self.refresh_database_data();
+            }
+            Err(error) => self.status = error,
+        }
     }
 
     fn send_simple_command(&mut self, command: &'static str) {
@@ -336,7 +646,7 @@ impl eframe::App for ControlApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::Panel::top("connection_toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Uchi-Pulse CDC Control").strong());
+                ui.label(RichText::new("Uchi-Pulse Settings").strong());
                 ui.separator();
                 ui.label("対象");
                 egui::ComboBox::from_id_salt("endpoint")
@@ -354,29 +664,51 @@ impl eframe::App for ControlApp {
                         {
                             self.set_endpoint(EndpointKind::Hub);
                         }
-                    });
-                ui.separator();
-                ui.label("ポート");
-                egui::ComboBox::from_id_salt("serial_port")
-                    .selected_text(if self.selected_port.is_empty() {
-                        "未選択"
-                    } else {
-                        &self.selected_port
-                    })
-                    .show_ui(ui, |ui| {
-                        for port in self.ports.clone() {
-                            ui.selectable_value(&mut self.selected_port, port.clone(), port);
+                        if ui
+                            .selectable_label(self.endpoint == EndpointKind::Database, "SQLite")
+                            .clicked()
+                        {
+                            self.set_endpoint(EndpointKind::Database);
                         }
                     });
-                if ui.button("更新").clicked() {
-                    self.refresh_ports();
-                }
-                if self.connection.is_some() {
-                    if ui.button("切断").clicked() {
-                        self.disconnect();
+                if self.endpoint == EndpointKind::Database {
+                    ui.separator();
+                    ui.label("DBパス");
+                    ui.add(
+                        TextEdit::singleline(&mut self.database_path)
+                            .desired_width(280.0)
+                            .hint_text("例: ./uchi-pulse.db"),
+                    );
+                    if ui.button("開く").clicked() {
+                        self.open_database();
                     }
-                } else if ui.button("接続").clicked() {
-                    self.connect();
+                    if self.database.is_some() && ui.button("閉じる").clicked() {
+                        self.close_database();
+                    }
+                } else {
+                    ui.separator();
+                    ui.label("ポート");
+                    egui::ComboBox::from_id_salt("serial_port")
+                        .selected_text(if self.selected_port.is_empty() {
+                            "未選択"
+                        } else {
+                            &self.selected_port
+                        })
+                        .show_ui(ui, |ui| {
+                            for port in self.ports.clone() {
+                                ui.selectable_value(&mut self.selected_port, port.clone(), port);
+                            }
+                        });
+                    if ui.button("更新").clicked() {
+                        self.refresh_ports();
+                    }
+                    if self.connection.is_some() {
+                        if ui.button("切断").clicked() {
+                            self.disconnect();
+                        }
+                    } else if ui.button("接続").clicked() {
+                        self.connect();
+                    }
                 }
                 ui.separator();
                 ui.small(&self.font_info);
@@ -389,6 +721,11 @@ impl eframe::App for ControlApp {
                 ui.colored_label(color, &self.status);
             });
         });
+
+        if self.endpoint == EndpointKind::Database {
+            self.show_database_ui(ui);
+            return;
+        }
 
         egui::Panel::left("commands")
             .resizable(true)
@@ -489,6 +826,472 @@ impl eframe::App for ControlApp {
     }
 }
 
+impl ControlApp {
+    fn show_database_ui(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.heading("親機設定");
+            ui.separator();
+            for section in [
+                DatabaseSection::Devices,
+                DatabaseSection::Families,
+                DatabaseSection::Actions,
+                DatabaseSection::Destinations,
+                DatabaseSection::Events,
+            ] {
+                if ui
+                    .selectable_label(self.database_section == section, section.label())
+                    .clicked()
+                {
+                    self.select_database_section(section);
+                }
+            }
+            if ui
+                .add_enabled(self.database.is_some(), egui::Button::new("再読込"))
+                .clicked()
+            {
+                self.refresh_database_data();
+            }
+        });
+        ui.colored_label(
+            Color32::YELLOW,
+            "親機を停止してから設定を変更してください。保存後は親機を再起動してください。",
+        );
+        ui.separator();
+
+        if self.database.is_none() {
+            ui.heading("SQLiteデータベースを開いてください");
+            ui.label("画面上部のDBパスを指定して「開く」を押してください。");
+            return;
+        }
+
+        match self.database_section {
+            DatabaseSection::Devices => self.show_device_editor(ui),
+            DatabaseSection::Families => self.show_family_editor(ui),
+            DatabaseSection::Actions => self.show_action_editor(ui),
+            DatabaseSection::Destinations => self.show_destination_editor(ui),
+            DatabaseSection::Events => self.show_event_viewer(ui),
+        }
+    }
+
+    fn show_device_editor(&mut self, ui: &mut egui::Ui) {
+        let devices = self.devices.clone();
+        let mut save = false;
+        let mut delete = false;
+        ui.columns(2, |columns| {
+            columns[0].heading("子機一覧");
+            if columns[0].button("新規").clicked() {
+                self.new_device();
+            }
+            for device in &devices {
+                let selected = self.selected_device.as_deref() == Some(device.device_id.as_str());
+                if columns[0]
+                    .selectable_label(
+                        selected,
+                        format!(
+                            "{}{}",
+                            device.name,
+                            if device.enabled { "" } else { "（無効）" }
+                        ),
+                    )
+                    .clicked()
+                {
+                    self.selected_device = Some(device.device_id.clone());
+                    self.device_form = device.clone();
+                }
+            }
+
+            columns[1].heading("子機情報");
+            columns[1].label("子機ID");
+            columns[1].add_enabled(
+                self.selected_device.is_none(),
+                TextEdit::singleline(&mut self.device_form.device_id),
+            );
+            columns[1].label("表示名");
+            columns[1].add(TextEdit::singleline(&mut self.device_form.name));
+            columns[1].label("種別");
+            columns[1].add(TextEdit::singleline(&mut self.device_form.device_type));
+            columns[1].checkbox(&mut self.device_form.enabled, "有効");
+            columns[1].horizontal(|ui| {
+                if ui.button("保存").clicked() {
+                    save = true;
+                }
+                if ui
+                    .add_enabled(self.selected_device.is_some(), egui::Button::new("削除"))
+                    .clicked()
+                {
+                    delete = true;
+                }
+            });
+        });
+        if save {
+            self.save_device();
+        }
+        if delete {
+            self.delete_selected_device();
+        }
+    }
+
+    fn show_family_editor(&mut self, ui: &mut egui::Ui) {
+        let families = self.families.clone();
+        let mut save = false;
+        let mut delete = false;
+        ui.columns(2, |columns| {
+            columns[0].heading("家族一覧");
+            if columns[0].button("新規").clicked() {
+                self.new_family();
+            }
+            for family in &families {
+                let selected = self.selected_family == Some(family.family_id);
+                if columns[0]
+                    .selectable_label(
+                        selected,
+                        format!(
+                            "{}（ID: {}）{}",
+                            family.display_name,
+                            family.family_id,
+                            if family.enabled { "" } else { "（無効）" }
+                        ),
+                    )
+                    .clicked()
+                {
+                    self.selected_family = Some(family.family_id);
+                    self.family_form = family.clone();
+                }
+            }
+
+            columns[1].heading("家族情報");
+            columns[1].label("家族ID");
+            columns[1].add_enabled(
+                self.selected_family.is_none(),
+                egui::DragValue::new(&mut self.family_form.family_id).range(1..=u32::MAX),
+            );
+            columns[1].label("表示名");
+            columns[1].add(TextEdit::singleline(&mut self.family_form.display_name));
+            columns[1].checkbox(&mut self.family_form.enabled, "有効");
+            columns[1].horizontal(|ui| {
+                if ui.button("保存").clicked() {
+                    save = true;
+                }
+                if ui
+                    .add_enabled(self.selected_family.is_some(), egui::Button::new("削除"))
+                    .clicked()
+                {
+                    delete = true;
+                }
+            });
+        });
+        if save {
+            self.save_family();
+        }
+        if delete {
+            self.delete_selected_family();
+        }
+    }
+
+    fn show_action_editor(&mut self, ui: &mut egui::Ui) {
+        let actions = self.actions.clone();
+        let families = self.families.clone();
+        let mut save = false;
+        let mut delete = false;
+        ui.columns(2, |columns| {
+            columns[0].heading("Action一覧");
+            if columns[0].button("新規").clicked() {
+                self.new_action();
+            }
+            for action in &actions {
+                let selected = self.selected_action == Some(action.action_id);
+                if columns[0]
+                    .selectable_label(
+                        selected,
+                        format!(
+                            "{}（ID: {}）{}",
+                            action.action_name,
+                            action.action_id,
+                            if action.enabled { "" } else { "（無効）" }
+                        ),
+                    )
+                    .clicked()
+                {
+                    self.selected_action = Some(action.action_id);
+                    self.action_form = action.clone();
+                }
+            }
+
+            columns[1].heading("Action情報");
+            columns[1].label("Action ID");
+            columns[1].add_enabled(
+                self.selected_action.is_none(),
+                egui::DragValue::new(&mut self.action_form.action_id).range(1..=u32::MAX),
+            );
+            columns[1].label("Action名");
+            columns[1].add(TextEdit::singleline(&mut self.action_form.action_name));
+            columns[1].horizontal(|ui| {
+                ui.label("対象");
+                egui::ComboBox::from_id_salt("action_target_type")
+                    .selected_text(&self.action_form.target_type)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.action_form.target_type,
+                            "FAMILY".to_owned(),
+                            "家族",
+                        );
+                        ui.selectable_value(
+                            &mut self.action_form.target_type,
+                            "COMMON".to_owned(),
+                            "共通",
+                        );
+                    });
+            });
+            if self.action_form.target_type == "FAMILY" {
+                let selected_name = self
+                    .action_form
+                    .target_family_id
+                    .and_then(|id| families.iter().find(|family| family.family_id == id))
+                    .map(|family| family.display_name.clone())
+                    .unwrap_or_else(|| "未選択".to_owned());
+                columns[1].horizontal(|ui| {
+                    ui.label("対象家族");
+                    egui::ComboBox::from_id_salt("action_target_family")
+                        .selected_text(selected_name)
+                        .show_ui(ui, |ui| {
+                            for family in &families {
+                                ui.selectable_value(
+                                    &mut self.action_form.target_family_id,
+                                    Some(family.family_id),
+                                    format!("{}（ID: {}）", family.display_name, family.family_id),
+                                );
+                            }
+                        });
+                });
+            } else {
+                self.action_form.target_family_id = None;
+            }
+            columns[1].label("Web表示メッセージ（任意）");
+            columns[1].add(TextEdit::singleline(&mut self.action_form.web_message));
+            columns[1].checkbox(&mut self.action_form.enabled, "有効");
+
+            columns[1].separator();
+            columns[1].label("状態変更");
+            let mut remove_change = None;
+            for (index, change) in self.action_form.state_changes.iter().enumerate() {
+                columns[1].horizontal(|ui| {
+                    ui.label(format!("{} = {}", change.state_type, change.state_value));
+                    if ui.small_button("削除").clicked() {
+                        remove_change = Some(index);
+                    }
+                });
+            }
+            if let Some(index) = remove_change {
+                self.action_form.state_changes.remove(index);
+            }
+            columns[1].horizontal(|ui| {
+                egui::ComboBox::from_id_salt("state_type_input")
+                    .selected_text(&self.state_type_input)
+                    .show_ui(ui, |ui| {
+                        for value in [
+                            "ENTRY_PERMISSION",
+                            "MEAL_NOTICE",
+                            "SNACK_NOTICE",
+                            "HELP_NOTICE",
+                            "MAILBOX",
+                        ] {
+                            ui.selectable_value(
+                                &mut self.state_type_input,
+                                value.to_owned(),
+                                value,
+                            );
+                        }
+                    });
+                egui::ComboBox::from_id_salt("state_value_input")
+                    .selected_text(&self.state_value_input)
+                    .show_ui(ui, |ui| {
+                        for value in ["UNSET", "ON", "OFF", "OK", "NG", "MEETING"] {
+                            ui.selectable_value(
+                                &mut self.state_value_input,
+                                value.to_owned(),
+                                value,
+                            );
+                        }
+                    });
+                if ui.button("状態変更を追加").clicked()
+                    && !self
+                        .action_form
+                        .state_changes
+                        .iter()
+                        .any(|change| change.state_type == self.state_type_input)
+                {
+                    self.action_form.state_changes.push(StateChangeRecord {
+                        state_type: self.state_type_input.clone(),
+                        state_value: self.state_value_input.clone(),
+                    });
+                }
+            });
+
+            columns[1].separator();
+            columns[1].label("通知設定");
+            columns[1].checkbox(
+                &mut self.action_form.notification_enabled,
+                "通知を有効にする",
+            );
+            columns[1].add(TextEdit::singleline(
+                &mut self.action_form.notification_message,
+            ));
+            columns[1].label("通知先家族");
+            for family in &families {
+                let mut selected = self
+                    .action_form
+                    .notification_targets
+                    .contains(&family.family_id);
+                if columns[1]
+                    .checkbox(
+                        &mut selected,
+                        format!("{}（ID: {}）", family.display_name, family.family_id),
+                    )
+                    .changed()
+                {
+                    if selected {
+                        self.action_form.notification_targets.push(family.family_id);
+                    } else {
+                        self.action_form
+                            .notification_targets
+                            .retain(|id| *id != family.family_id);
+                    }
+                }
+            }
+
+            columns[1].horizontal(|ui| {
+                if ui.button("保存").clicked() {
+                    save = true;
+                }
+                if ui
+                    .add_enabled(self.selected_action.is_some(), egui::Button::new("削除"))
+                    .clicked()
+                {
+                    delete = true;
+                }
+            });
+        });
+        if save {
+            self.save_action();
+        }
+        if delete {
+            self.delete_selected_action();
+        }
+    }
+
+    fn show_destination_editor(&mut self, ui: &mut egui::Ui) {
+        let destinations = self.notification_destinations.clone();
+        let families = self.families.clone();
+        let mut save = false;
+        let mut delete = false;
+        ui.columns(2, |columns| {
+            columns[0].heading("通知先一覧");
+            if columns[0].button("新規").clicked() {
+                self.new_notification_destination();
+            }
+            for destination in &destinations {
+                let Some(id) = destination.id else {
+                    continue;
+                };
+                let family_name = families
+                    .iter()
+                    .find(|family| family.family_id == destination.family_id)
+                    .map(|family| family.display_name.as_str())
+                    .unwrap_or("不明な家族");
+                if columns[0]
+                    .selectable_label(
+                        self.selected_notification_destination == Some(id),
+                        format!("{}: {}", family_name, destination.notification_type),
+                    )
+                    .clicked()
+                {
+                    self.selected_notification_destination = Some(id);
+                    self.notification_destination_form = destination.clone();
+                }
+            }
+
+            columns[1].heading("通知先情報");
+            let selected_family_name = families
+                .iter()
+                .find(|family| family.family_id == self.notification_destination_form.family_id)
+                .map(|family| family.display_name.clone())
+                .unwrap_or_else(|| "未選択".to_owned());
+            columns[1].horizontal(|ui| {
+                ui.label("家族");
+                egui::ComboBox::from_id_salt("destination_family")
+                    .selected_text(selected_family_name)
+                    .show_ui(ui, |ui| {
+                        for family in &families {
+                            ui.selectable_value(
+                                &mut self.notification_destination_form.family_id,
+                                family.family_id,
+                                format!("{}（ID: {}）", family.display_name, family.family_id),
+                            );
+                        }
+                    });
+            });
+            columns[1].horizontal(|ui| {
+                ui.label("通知種別");
+                egui::ComboBox::from_id_salt("destination_type")
+                    .selected_text(&self.notification_destination_form.notification_type)
+                    .show_ui(ui, |ui| {
+                        for value in ["LINE", "Slack", "メール", "その他"] {
+                            ui.selectable_value(
+                                &mut self.notification_destination_form.notification_type,
+                                value.to_owned(),
+                                value,
+                            );
+                        }
+                    });
+            });
+            columns[1].label("送信先ID・アドレス");
+            columns[1].add(TextEdit::singleline(
+                &mut self.notification_destination_form.destination,
+            ));
+            columns[1].checkbox(&mut self.notification_destination_form.enabled, "有効");
+            columns[1].horizontal(|ui| {
+                if ui.button("保存").clicked() {
+                    save = true;
+                }
+                if ui
+                    .add_enabled(
+                        self.selected_notification_destination.is_some(),
+                        egui::Button::new("削除"),
+                    )
+                    .clicked()
+                {
+                    delete = true;
+                }
+            });
+        });
+        if save {
+            self.save_notification_destination();
+        }
+        if delete {
+            self.delete_selected_notification_destination();
+        }
+    }
+
+    fn show_event_viewer(&mut self, ui: &mut egui::Ui) {
+        ui.heading("イベント履歴（最新500件）");
+        egui::ScrollArea::both().show(ui, |ui| {
+            egui::Grid::new("event_grid").striped(true).show(ui, |ui| {
+                for heading in ["ID", "受信日時", "子機ID", "イベントID"] {
+                    ui.label(RichText::new(heading).strong());
+                }
+                ui.end_row();
+                for event in &self.events {
+                    ui.label(event.id.to_string());
+                    ui.label(&event.received_at);
+                    ui.label(&event.device_id);
+                    ui.label(&event.event_id);
+                    ui.end_row();
+                }
+            });
+        });
+    }
+}
+
 fn pretty_json(value: &str) -> String {
     serde_json::from_str::<Value>(value)
         .ok()
@@ -574,7 +1377,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "Uchi-Pulse CDC Control",
+        "Uchi-Pulse Settings",
         options,
         Box::new(|context| Ok(Box::new(ControlApp::new(context)))),
     )
