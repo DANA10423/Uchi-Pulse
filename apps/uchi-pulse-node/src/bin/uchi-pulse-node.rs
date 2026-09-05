@@ -376,6 +376,7 @@ mod firmware {
         mut handler: FirmwareCdcHandler,
         mut watchdog: embassy_rp::watchdog::Watchdog,
         stack: embassy_net::Stack<'static>,
+        hub_endpoint: &'static HubEndpoint,
     ) -> ! {
         let mut parser = CdcLineParser::new();
         let mut packet = [0_u8; 64];
@@ -396,6 +397,7 @@ mod firmware {
                         line.as_slice(),
                         &mut response,
                         current_ip_address(&stack),
+                        current_hub_endpoint(*hub_endpoint.lock().await),
                     ) {
                         Ok(result) => result,
                         Err(_) => continue,
@@ -428,6 +430,13 @@ mod firmware {
         let ip_address = config.address.address();
         let mut text = Ipv4Text::new();
         write!(&mut text, "{ip_address}").ok()?;
+        Some(text)
+    }
+
+    fn current_hub_endpoint(endpoint: Option<IpEndpoint>) -> Option<heapless::String<64>> {
+        let endpoint = endpoint?;
+        let mut text = heapless::String::new();
+        write!(&mut text, "{endpoint}").ok()?;
         Some(text)
     }
 
@@ -507,12 +516,14 @@ mod firmware {
             rng.next_u64(),
         );
         spawner.spawn(net_task(runner).unwrap());
+        let hub_endpoint = HUB_ENDPOINT.init(Mutex::new(None));
         spawner.spawn(
             cdc_task(
                 cdc_class,
                 cdc_handler,
                 embassy_rp::watchdog::Watchdog::new(p.WATCHDOG),
                 stack,
+                hub_endpoint,
             )
             .unwrap(),
         );
@@ -648,7 +659,6 @@ mod firmware {
             CONTROL_TX_BUFFER.init([0; 512]),
         );
         control_socket.bind(DEFAULT_CONFIG.local_port).unwrap();
-        let hub_endpoint = HUB_ENDPOINT.init(Mutex::new(None));
 
         let event_socket = UdpSocket::new(
             stack,
