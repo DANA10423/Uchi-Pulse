@@ -41,7 +41,17 @@ Action本体は以下を持つ。
 - `web_message`（任意）
 - `enabled`
 
-FAMILY Actionは対象家族ごとに別Action IDを登録する。COMMON Actionは対象家族を持たない。
+`target_type` は以下の3種類とする。
+
+| target_type | 意味 | target_family_id |
+|---|---|---|
+| `FAMILY` | 特定の家族1人 | 必須 |
+| `ALL_FAMILIES` | 有効な家族全員 | `NULL` |
+| `COMMON` | 家族に属さない共通状態 | `NULL` |
+
+`ALL_FAMILIES` はAction実行時点で `families.enabled = 1` の家族全員へ展開する。家族の追加・無効化後もAction定義は変更せず、その時点の有効家族を対象とする。
+
+特定家族向けの `FAMILY` Actionは対象家族ごとに別Action IDを登録する。`ALL_FAMILIES` Actionは1つのAction IDで有効家族全員を対象にできる。`COMMON` Actionは対象家族を持たない。
 
 ### 3.2 状態変更の分離
 
@@ -49,13 +59,13 @@ Actionは状態を必ず変更するものとはしない。状態変更を `act
 
 ```text
 Action
-  ├─ 対象家族 0..1
+  ├─ 対象: 特定家族 / 有効家族全員 / 共通
   ├─ 状態変更 0..n
   ├─ Web表示 任意
   └─ スマートフォン通知 任意
 ```
 
-これにより、通常Action、複数状態を変更するAction、通知専用Actionを同一モデルで扱う。
+これにより、通常Action、複数状態を変更するAction、全員対象Action、通知専用Actionを同一モデルで扱う。
 
 ### 3.3 基本Actionパターン
 
@@ -63,20 +73,20 @@ Action
 
 | Action | target_type | 状態変更 |
 |---|---|---|
-| ご飯通知 | `FAMILY` | `MEAL_NOTICE=ON` |
-| ご飯通知クリア | `FAMILY` | `MEAL_NOTICE=OFF` |
-| おやつ通知 | `FAMILY` | `SNACK_NOTICE=ON` |
-| おやつ通知クリア | `FAMILY` | `SNACK_NOTICE=OFF` |
-| 食事通知クリア | `FAMILY` | `MEAL_NOTICE=OFF`, `SNACK_NOTICE=OFF` |
-| HELP通知 | `FAMILY` | `HELP_NOTICE=ON` |
-| HELP通知クリア | `FAMILY` | `HELP_NOTICE=OFF` |
+| ご飯通知 | `FAMILY` / `ALL_FAMILIES` | `MEAL_NOTICE=ON` |
+| ご飯通知クリア | `FAMILY` / `ALL_FAMILIES` | `MEAL_NOTICE=OFF` |
+| おやつ通知 | `FAMILY` / `ALL_FAMILIES` | `SNACK_NOTICE=ON` |
+| おやつ通知クリア | `FAMILY` / `ALL_FAMILIES` | `SNACK_NOTICE=OFF` |
+| 食事通知クリア | `FAMILY` / `ALL_FAMILIES` | `MEAL_NOTICE=OFF`, `SNACK_NOTICE=OFF` |
+| HELP通知 | `FAMILY` / `ALL_FAMILIES` | `HELP_NOTICE=ON` |
+| HELP通知クリア | `FAMILY` / `ALL_FAMILIES` | `HELP_NOTICE=OFF` |
 | 入室OK | `FAMILY` | `ENTRY_PERMISSION=OK` |
 | 入室NG | `FAMILY` | `ENTRY_PERMISSION=NG` |
 | 会議中 | `FAMILY` | `ENTRY_PERMISSION=MEETING` |
 | ポスト投函 | `COMMON` | `MAILBOX=ON` |
 | ポスト投函解除 | `COMMON` | `MAILBOX=OFF` |
 
-「食事通知クリア」は対象家族のご飯通知とおやつ通知を同時に解除する。
+「食事通知クリア」は対象となる家族のご飯通知とおやつ通知を同時に解除する。`ALL_FAMILIES` の場合は、有効な家族全員について両状態を解除する。
 
 ---
 
@@ -125,6 +135,8 @@ Actionの対象家族と通知先家族は別概念とする。
 - 通知メッセージ
 - 通知先家族 0..n
 
+`ALL_FAMILIES` はActionの状態変更対象を表すものであり、スマートフォン通知先を自動的に全員へ変更するものではない。通知先は `action_notification_targets` で独立して設定する。
+
 通知メッセージはActionごとに設定可能とする。LINE / Slack等の実際の送信先は家族ごとの通知先設定から解決する。
 
 外部通知失敗はUDP ACK、EVENT履歴保存、状態変更に影響させない。
@@ -149,9 +161,14 @@ Action ID
  ↓
 Action本体取得
  ↓
+target_type解決
+ ├─ FAMILY       → target_family_id の家族1人
+ ├─ ALL_FAMILIES → families.enabled = 1 の家族全員
+ └─ COMMON       → 家族対象なし
+ ↓
 EVENT履歴保存
  ↓
-状態変更 0..n件を実行
+状態変更 0..n件を対象へ適用
  ↓
 Web表示（定義されている場合）
  ↓
@@ -167,12 +184,15 @@ LINE / Slack等の通知機能
 ## 7. 設計原則
 
 - 子機はAction IDを不透明な識別子として扱う。
-- Actionの意味は親機で管理する。
-- FAMILY Actionは対象家族ごとに別Action IDを持つ。
+- Actionの意味と対象解決は親機で管理する。
+- `FAMILY` は特定家族1人を対象とし、対象家族ごとに別Action IDを持つ。
+- `ALL_FAMILIES` は実行時点の有効家族全員を対象とし、`target_family_id` は持たない。
+- `COMMON` は家族単位ではない共通状態を対象とする。
 - Actionと状態変更を分離する。
 - 1 Actionは0..n件の状態変更を持つ。
 - 状態変更なしの通知専用Actionを許容する。
 - Action対象家族と通知先家族を分離する。
+- `ALL_FAMILIES` と通知先全員は同義ではない。
 - 通知メッセージはActionごとに設定できる。
 - 入室問い合わせActionは複数作成でき、入室可否状態を直接変更しない。
 
