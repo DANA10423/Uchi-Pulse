@@ -154,6 +154,7 @@ pub struct EmptyData {}
 pub struct NodeCdcStatus {
     pub device_id: uchi_pulse_common::DeviceId,
     pub ip_address: Option<Ipv4Text>,
+    pub hub_endpoint: Option<heapless::String<64>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -202,7 +203,7 @@ impl<S: ConfigStorage> NodeCdcHandler<S> {
         line: &[u8],
         destination: &mut [u8],
     ) -> Result<CdcHandleResult, CdcHandlerError> {
-        self.handle_line_with_status(line, destination, None)
+        self.handle_line_with_status(line, destination, None, None)
     }
 
     pub fn handle_line_with_status(
@@ -210,6 +211,7 @@ impl<S: ConfigStorage> NodeCdcHandler<S> {
         line: &[u8],
         destination: &mut [u8],
         ip_address: Option<Ipv4Text>,
+        hub_endpoint: Option<heapless::String<64>>,
     ) -> Result<CdcHandleResult, CdcHandlerError> {
         let request: CdcRequest<NodeCdcParams> = match decode_line(line) {
             Ok(request) => request,
@@ -267,6 +269,7 @@ impl<S: ConfigStorage> NodeCdcHandler<S> {
                     NodeCdcStatus {
                         device_id: self.manager.config().device_id.clone(),
                         ip_address,
+                        hub_endpoint,
                     },
                 ),
                 destination,
@@ -490,12 +493,13 @@ mod tests {
         handler: &mut NodeCdcHandler<MemoryConfigStorage<CONFIG_STORAGE_SIZE>>,
         request: CdcRequest<NodeCdcParams>,
         ip_address: Option<Ipv4Text>,
+        hub_endpoint: Option<heapless::String<64>>,
     ) -> (CdcHandleResult, CdcResponse<NodeCdcStatus>) {
         let mut input = [0; 4096];
         let used = encode_line(&request, &mut input).unwrap();
         let mut output = [0; 4096];
         let result = handler
-            .handle_line_with_status(&input[..used], &mut output, ip_address)
+            .handle_line_with_status(&input[..used], &mut output, ip_address, hub_endpoint)
             .unwrap();
         let response = decode_line(&output[..result.response_len]).unwrap();
         (result, response)
@@ -630,24 +634,32 @@ mod tests {
     }
 
     #[test]
-    fn get_status_returns_runtime_ip_address() {
+    fn get_status_returns_runtime_network_status() {
         let mut handler = handler();
         let (_, response) = send_status(
             &mut handler,
             request("get_status", NodeCdcParams::default()),
             Some(text("192.168.1.42").unwrap()),
+            Some(text("192.168.1.10:5000").unwrap()),
         );
         assert_eq!(response.status, CdcStatus::Ok);
         let status = response.data.unwrap();
         assert_eq!(status.device_id.as_str(), "family-node-01");
         assert_eq!(status.ip_address.unwrap().as_str(), "192.168.1.42");
+        assert_eq!(
+            status.hub_endpoint.unwrap().as_str(),
+            "192.168.1.10:5000"
+        );
 
         let (_, response) = send_status(
             &mut handler,
             request("get_status", NodeCdcParams::default()),
             None,
+            None,
         );
-        assert_eq!(response.data.unwrap().ip_address, None);
+        let status = response.data.unwrap();
+        assert_eq!(status.ip_address, None);
+        assert_eq!(status.hub_endpoint, None);
     }
 
     #[test]
